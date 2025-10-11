@@ -3154,573 +3154,6 @@ func (sm *InMemoryStateManager) cleanup() {
 	}
 }
 package tenantinfra
-
-import (
-	"context"
-	"database/sql"
-
-	"github.com/Abraxas-365/craftable/errx"
-	"github.com/Abraxas-365/relay/iam/tenant"
-	"github.com/Abraxas-365/relay/pkg/kernel"
-	"github.com/jmoiron/sqlx"
-	"github.com/lib/pq"
-)
-
-// PostgresTenantRepository implementación de PostgreSQL para TenantRepository
-type PostgresTenantRepository struct {
-	db *sqlx.DB
-}
-
-// NewPostgresTenantRepository crea una nueva instancia del repositorio de tenants
-func NewPostgresTenantRepository(db *sqlx.DB) tenant.TenantRepository {
-	return &PostgresTenantRepository{
-		db: db,
-	}
-}
-
-// FindByID busca un tenant por ID
-func (r *PostgresTenantRepository) FindByID(ctx context.Context, id kernel.TenantID) (*tenant.Tenant, error) {
-	query := `
-		SELECT 
-			id, company_name, ruc, status, subscription_plan, max_users, current_users,
-			trial_expires_at, subscription_expires_at,
-			sire_client_id, sire_client_secret, sire_username, sire_password,
-			created_at, updated_at
-		FROM tenants 
-		WHERE id = $1`
-
-	var t tenant.Tenant
-	err := r.db.GetContext(ctx, &t, query, id.String())
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, tenant.ErrTenantNotFound().WithDetail("tenant_id", id.String())
-		}
-		return nil, errx.Wrap(err, "failed to find tenant by id", errx.TypeInternal).
-			WithDetail("tenant_id", id.String())
-	}
-
-	return &t, nil
-}
-
-// FindByRUC busca un tenant por RUC
-func (r *PostgresTenantRepository) FindByRUC(ctx context.Context, ruc string) (*tenant.Tenant, error) {
-	query := `
-		SELECT 
-			id, company_name, ruc, status, subscription_plan, max_users, current_users,
-			trial_expires_at, subscription_expires_at,
-			sire_client_id, sire_client_secret, sire_username, sire_password,
-			created_at, updated_at
-		FROM tenants 
-		WHERE ruc = $1`
-
-	var t tenant.Tenant
-	err := r.db.GetContext(ctx, &t, query, ruc)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, tenant.ErrTenantNotFound().WithDetail("ruc", ruc)
-		}
-		return nil, errx.Wrap(err, "failed to find tenant by ruc", errx.TypeInternal).
-			WithDetail("ruc", ruc)
-	}
-
-	return &t, nil
-}
-
-// FindAll busca todos los tenants
-func (r *PostgresTenantRepository) FindAll(ctx context.Context) ([]*tenant.Tenant, error) {
-	query := `
-		SELECT 
-			id, company_name, ruc, status, subscription_plan, max_users, current_users,
-			trial_expires_at, subscription_expires_at,
-			sire_client_id, sire_client_secret, sire_username, sire_password,
-			created_at, updated_at
-		FROM tenants 
-		ORDER BY company_name ASC`
-
-	var tenants []tenant.Tenant
-	err := r.db.SelectContext(ctx, &tenants, query)
-	if err != nil {
-		return nil, errx.Wrap(err, "failed to find all tenants", errx.TypeInternal)
-	}
-
-	// Convertir a slice de punteros
-	result := make([]*tenant.Tenant, len(tenants))
-	for i := range tenants {
-		result[i] = &tenants[i]
-	}
-
-	return result, nil
-}
-
-// FindActive busca todos los tenants activos
-func (r *PostgresTenantRepository) FindActive(ctx context.Context) ([]*tenant.Tenant, error) {
-	query := `
-		SELECT 
-			id, company_name, ruc, status, subscription_plan, max_users, current_users,
-			trial_expires_at, subscription_expires_at,
-			sire_client_id, sire_client_secret, sire_username, sire_password,
-			created_at, updated_at
-		FROM tenants 
-		WHERE status = $1
-		ORDER BY company_name ASC`
-
-	var tenants []tenant.Tenant
-	err := r.db.SelectContext(ctx, &tenants, query, tenant.TenantStatusActive)
-	if err != nil {
-		return nil, errx.Wrap(err, "failed to find active tenants", errx.TypeInternal)
-	}
-
-	// Convertir a slice de punteros
-	result := make([]*tenant.Tenant, len(tenants))
-	for i := range tenants {
-		result[i] = &tenants[i]
-	}
-
-	return result, nil
-}
-
-// Save guarda o actualiza un tenant
-func (r *PostgresTenantRepository) Save(ctx context.Context, t tenant.Tenant) error {
-	// Verificar si el tenant ya existe
-	exists, err := r.tenantExists(ctx, t.ID)
-	if err != nil {
-		return errx.Wrap(err, "failed to check tenant existence", errx.TypeInternal)
-	}
-
-	if exists {
-		return r.update(ctx, t)
-	}
-	return r.create(ctx, t)
-}
-
-// create crea un nuevo tenant
-func (r *PostgresTenantRepository) create(ctx context.Context, t tenant.Tenant) error {
-	query := `
-		INSERT INTO tenants (
-			id, company_name, ruc, status, subscription_plan, max_users, current_users,
-			trial_expires_at, subscription_expires_at,
-			sire_client_id, sire_client_secret, sire_username, sire_password,
-			created_at, updated_at
-		) VALUES (
-			:id, :company_name, :ruc, :status, :subscription_plan, :max_users, :current_users,
-			:trial_expires_at, :subscription_expires_at,
-			:sire_client_id, :sire_client_secret, :sire_username, :sire_password,
-			:created_at, :updated_at
-		)`
-
-	_, err := r.db.NamedExecContext(ctx, query, t)
-	if err != nil {
-		// Verificar violación de constraint de RUC único
-		if pqErr, ok := err.(*pq.Error); ok {
-			if pqErr.Code == "23505" && pqErr.Constraint == "tenants_ruc_key" {
-				return tenant.ErrTenantAlreadyExists().
-					WithDetail("ruc", t.RUC)
-			}
-		}
-		return errx.Wrap(err, "failed to create tenant", errx.TypeInternal).
-			WithDetail("tenant_id", t.ID.String()).
-			WithDetail("ruc", t.RUC)
-	}
-
-	return nil
-}
-
-// update actualiza un tenant existente
-func (r *PostgresTenantRepository) update(ctx context.Context, t tenant.Tenant) error {
-	query := `
-		UPDATE tenants SET
-			company_name = :company_name,
-			ruc = :ruc,
-			status = :status,
-			subscription_plan = :subscription_plan,
-			max_users = :max_users,
-			current_users = :current_users,
-			trial_expires_at = :trial_expires_at,
-			subscription_expires_at = :subscription_expires_at,
-			sire_client_id = :sire_client_id,
-			sire_client_secret = :sire_client_secret,
-			sire_username = :sire_username,
-			sire_password = :sire_password,
-			updated_at = :updated_at
-		WHERE id = :id`
-
-	result, err := r.db.NamedExecContext(ctx, query, t)
-	if err != nil {
-		// Verificar violación de constraint de RUC único
-		if pqErr, ok := err.(*pq.Error); ok {
-			if pqErr.Code == "23505" && pqErr.Constraint == "tenants_ruc_key" {
-				return tenant.ErrTenantAlreadyExists().
-					WithDetail("ruc", t.RUC)
-			}
-		}
-		return errx.Wrap(err, "failed to update tenant", errx.TypeInternal).
-			WithDetail("tenant_id", t.ID.String())
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return errx.Wrap(err, "failed to get rows affected", errx.TypeInternal)
-	}
-
-	if rowsAffected == 0 {
-		return tenant.ErrTenantNotFound().WithDetail("tenant_id", t.ID.String())
-	}
-
-	return nil
-}
-
-// Delete elimina un tenant
-func (r *PostgresTenantRepository) Delete(ctx context.Context, id kernel.TenantID) error {
-	query := `DELETE FROM tenants WHERE id = $1`
-
-	result, err := r.db.ExecContext(ctx, query, id.String())
-	if err != nil {
-		return errx.Wrap(err, "failed to delete tenant", errx.TypeInternal).
-			WithDetail("tenant_id", id.String())
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return errx.Wrap(err, "failed to get rows affected", errx.TypeInternal)
-	}
-
-	if rowsAffected == 0 {
-		return tenant.ErrTenantNotFound().WithDetail("tenant_id", id.String())
-	}
-
-	return nil
-}
-
-// ExistsByRUC verifica si existe un tenant con el RUC dado
-func (r *PostgresTenantRepository) ExistsByRUC(ctx context.Context, ruc string) (bool, error) {
-	query := `SELECT EXISTS(SELECT 1 FROM tenants WHERE ruc = $1)`
-
-	var exists bool
-	err := r.db.GetContext(ctx, &exists, query, ruc)
-	if err != nil {
-		return false, errx.Wrap(err, "failed to check tenant existence by ruc", errx.TypeInternal).
-			WithDetail("ruc", ruc)
-	}
-
-	return exists, nil
-}
-
-// tenantExists verifica si un tenant existe por ID
-func (r *PostgresTenantRepository) tenantExists(ctx context.Context, id kernel.TenantID) (bool, error) {
-	query := `SELECT EXISTS(SELECT 1 FROM tenants WHERE id = $1)`
-
-	var exists bool
-	err := r.db.GetContext(ctx, &exists, query, id.String())
-	if err != nil {
-		return false, errx.Wrap(err, "failed to check tenant existence", errx.TypeInternal).
-			WithDetail("tenant_id", id.String())
-	}
-
-	return exists, nil
-}
-
-// FindByStatus busca tenants por estado
-func (r *PostgresTenantRepository) FindByStatus(ctx context.Context, status tenant.TenantStatus) ([]*tenant.Tenant, error) {
-	query := `
-		SELECT 
-			id, company_name, ruc, status, subscription_plan, max_users, current_users,
-			trial_expires_at, subscription_expires_at,
-			sire_client_id, sire_client_secret, sire_username, sire_password,
-			created_at, updated_at
-		FROM tenants 
-		WHERE status = $1
-		ORDER BY company_name ASC`
-
-	var tenants []tenant.Tenant
-	err := r.db.SelectContext(ctx, &tenants, query, status)
-	if err != nil {
-		return nil, errx.Wrap(err, "failed to find tenants by status", errx.TypeInternal).
-			WithDetail("status", string(status))
-	}
-
-	// Convertir a slice de punteros
-	result := make([]*tenant.Tenant, len(tenants))
-	for i := range tenants {
-		result[i] = &tenants[i]
-	}
-
-	return result, nil
-}
-
-// FindBySubscriptionPlan busca tenants por plan de suscripción
-func (r *PostgresTenantRepository) FindBySubscriptionPlan(ctx context.Context, plan tenant.SubscriptionPlan) ([]*tenant.Tenant, error) {
-	query := `
-		SELECT 
-			id, company_name, ruc, status, subscription_plan, max_users, current_users,
-			trial_expires_at, subscription_expires_at,
-			sire_client_id, sire_client_secret, sire_username, sire_password,
-			created_at, updated_at
-		FROM tenants 
-		WHERE subscription_plan = $1
-		ORDER BY company_name ASC`
-
-	var tenants []tenant.Tenant
-	err := r.db.SelectContext(ctx, &tenants, query, plan)
-	if err != nil {
-		return nil, errx.Wrap(err, "failed to find tenants by subscription plan", errx.TypeInternal).
-			WithDetail("plan", string(plan))
-	}
-
-	// Convertir a slice de punteros
-	result := make([]*tenant.Tenant, len(tenants))
-	for i := range tenants {
-		result[i] = &tenants[i]
-	}
-
-	return result, nil
-}
-
-// FindTenantsWithSireCredentials busca tenants que tienen credenciales SIRE configuradas
-func (r *PostgresTenantRepository) FindTenantsWithSireCredentials(ctx context.Context) ([]*tenant.Tenant, error) {
-	query := `
-		SELECT 
-			id, company_name, ruc, status, subscription_plan, max_users, current_users,
-			trial_expires_at, subscription_expires_at,
-			sire_client_id, sire_client_secret, sire_username, sire_password,
-			created_at, updated_at
-		FROM tenants 
-		WHERE sire_client_id IS NOT NULL 
-			AND sire_client_secret IS NOT NULL
-			AND sire_username IS NOT NULL
-			AND sire_password IS NOT NULL
-		ORDER BY company_name ASC`
-
-	var tenants []tenant.Tenant
-	err := r.db.SelectContext(ctx, &tenants, query)
-	if err != nil {
-		return nil, errx.Wrap(err, "failed to find tenants with sire credentials", errx.TypeInternal)
-	}
-
-	// Convertir a slice de punteros
-	result := make([]*tenant.Tenant, len(tenants))
-	for i := range tenants {
-		result[i] = &tenants[i]
-	}
-
-	return result, nil
-}
-
-// CountAll cuenta todos los tenants
-func (r *PostgresTenantRepository) CountAll(ctx context.Context) (int, error) {
-	query := `SELECT COUNT(*) FROM tenants`
-
-	var count int
-	err := r.db.GetContext(ctx, &count, query)
-	if err != nil {
-		return 0, errx.Wrap(err, "failed to count all tenants", errx.TypeInternal)
-	}
-
-	return count, nil
-}
-
-// CountByStatus cuenta tenants por estado
-func (r *PostgresTenantRepository) CountByStatus(ctx context.Context, status tenant.TenantStatus) (int, error) {
-	query := `SELECT COUNT(*) FROM tenants WHERE status = $1`
-
-	var count int
-	err := r.db.GetContext(ctx, &count, query, status)
-	if err != nil {
-		return 0, errx.Wrap(err, "failed to count tenants by status", errx.TypeInternal).
-			WithDetail("status", string(status))
-	}
-
-	return count, nil
-}
-
-// =============================================================================
-// TenantConfigRepository Implementation
-// =============================================================================
-
-// PostgresTenantConfigRepository implementación de PostgreSQL para TenantConfigRepository
-type PostgresTenantConfigRepository struct {
-	db *sqlx.DB
-}
-
-// NewPostgresTenantConfigRepository crea una nueva instancia del repositorio de configuración de tenants
-func NewPostgresTenantConfigRepository(db *sqlx.DB) tenant.TenantConfigRepository {
-	return &PostgresTenantConfigRepository{
-		db: db,
-	}
-}
-
-// FindByTenant busca todas las configuraciones de un tenant
-func (r *PostgresTenantConfigRepository) FindByTenant(ctx context.Context, tenantID kernel.TenantID) (map[string]string, error) {
-	query := `
-		SELECT key, value 
-		FROM tenant_config 
-		WHERE tenant_id = $1
-		ORDER BY key ASC`
-
-	rows, err := r.db.QueryContext(ctx, query, tenantID.String())
-	if err != nil {
-		return nil, errx.Wrap(err, "failed to find tenant config", errx.TypeInternal).
-			WithDetail("tenant_id", tenantID.String())
-	}
-	defer rows.Close()
-
-	config := make(map[string]string)
-	for rows.Next() {
-		var key, value string
-		if err := rows.Scan(&key, &value); err != nil {
-			return nil, errx.Wrap(err, "failed to scan tenant config row", errx.TypeInternal)
-		}
-		config[key] = value
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, errx.Wrap(err, "error iterating tenant config rows", errx.TypeInternal)
-	}
-
-	return config, nil
-}
-
-// SaveSetting guarda o actualiza una configuración específica
-func (r *PostgresTenantConfigRepository) SaveSetting(ctx context.Context, tenantID kernel.TenantID, key, value string) error {
-	query := `
-		INSERT INTO tenant_config (tenant_id, key, value, created_at, updated_at)
-		VALUES ($1, $2, $3, NOW(), NOW())
-		ON CONFLICT (tenant_id, key) 
-		DO UPDATE SET 
-			value = EXCLUDED.value,
-			updated_at = NOW()`
-
-	_, err := r.db.ExecContext(ctx, query, tenantID.String(), key, value)
-	if err != nil {
-		return errx.Wrap(err, "failed to save tenant config setting", errx.TypeInternal).
-			WithDetail("tenant_id", tenantID.String()).
-			WithDetail("key", key)
-	}
-
-	return nil
-}
-
-// DeleteSetting elimina una configuración específica
-func (r *PostgresTenantConfigRepository) DeleteSetting(ctx context.Context, tenantID kernel.TenantID, key string) error {
-	query := `DELETE FROM tenant_config WHERE tenant_id = $1 AND key = $2`
-
-	result, err := r.db.ExecContext(ctx, query, tenantID.String(), key)
-	if err != nil {
-		return errx.Wrap(err, "failed to delete tenant config setting", errx.TypeInternal).
-			WithDetail("tenant_id", tenantID.String()).
-			WithDetail("key", key)
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return errx.Wrap(err, "failed to get rows affected", errx.TypeInternal)
-	}
-
-	if rowsAffected == 0 {
-		return errx.New("tenant config setting not found", errx.TypeNotFound).
-			WithDetail("tenant_id", tenantID.String()).
-			WithDetail("key", key)
-	}
-
-	return nil
-}
-
-// GetSetting obtiene una configuración específica
-func (r *PostgresTenantConfigRepository) GetSetting(ctx context.Context, tenantID kernel.TenantID, key string) (string, error) {
-	query := `SELECT value FROM tenant_config WHERE tenant_id = $1 AND key = $2`
-
-	var value string
-	err := r.db.GetContext(ctx, &value, query, tenantID.String(), key)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return "", errx.New("tenant config setting not found", errx.TypeNotFound).
-				WithDetail("tenant_id", tenantID.String()).
-				WithDetail("key", key)
-		}
-		return "", errx.Wrap(err, "failed to get tenant config setting", errx.TypeInternal).
-			WithDetail("tenant_id", tenantID.String()).
-			WithDetail("key", key)
-	}
-
-	return value, nil
-}
-
-// HasSetting verifica si existe una configuración específica
-func (r *PostgresTenantConfigRepository) HasSetting(ctx context.Context, tenantID kernel.TenantID, key string) (bool, error) {
-	query := `SELECT EXISTS(SELECT 1 FROM tenant_config WHERE tenant_id = $1 AND key = $2)`
-
-	var exists bool
-	err := r.db.GetContext(ctx, &exists, query, tenantID.String(), key)
-	if err != nil {
-		return false, errx.Wrap(err, "failed to check tenant config setting existence", errx.TypeInternal).
-			WithDetail("tenant_id", tenantID.String()).
-			WithDetail("key", key)
-	}
-
-	return exists, nil
-}
-
-// DeleteAllSettings elimina todas las configuraciones de un tenant
-func (r *PostgresTenantConfigRepository) DeleteAllSettings(ctx context.Context, tenantID kernel.TenantID) error {
-	query := `DELETE FROM tenant_config WHERE tenant_id = $1`
-
-	_, err := r.db.ExecContext(ctx, query, tenantID.String())
-	if err != nil {
-		return errx.Wrap(err, "failed to delete all tenant config settings", errx.TypeInternal).
-			WithDetail("tenant_id", tenantID.String())
-	}
-
-	return nil
-}
-
-// CountSettings cuenta las configuraciones de un tenant
-func (r *PostgresTenantConfigRepository) CountSettings(ctx context.Context, tenantID kernel.TenantID) (int, error) {
-	query := `SELECT COUNT(*) FROM tenant_config WHERE tenant_id = $1`
-
-	var count int
-	err := r.db.GetContext(ctx, &count, query, tenantID.String())
-	if err != nil {
-		return 0, errx.Wrap(err, "failed to count tenant config settings", errx.TypeInternal).
-			WithDetail("tenant_id", tenantID.String())
-	}
-
-	return count, nil
-}
-
-// BatchSaveSettings guarda múltiples configuraciones de una vez
-func (r *PostgresTenantConfigRepository) BatchSaveSettings(ctx context.Context, tenantID kernel.TenantID, settings map[string]string) error {
-	if len(settings) == 0 {
-		return nil
-	}
-
-	tx, err := r.db.BeginTxx(ctx, nil)
-	if err != nil {
-		return errx.Wrap(err, "failed to begin transaction", errx.TypeInternal)
-	}
-	defer tx.Rollback()
-
-	query := `
-		INSERT INTO tenant_config (tenant_id, key, value, created_at, updated_at)
-		VALUES ($1, $2, $3, NOW(), NOW())
-		ON CONFLICT (tenant_id, key) 
-		DO UPDATE SET 
-			value = EXCLUDED.value,
-			updated_at = NOW()`
-
-	for key, value := range settings {
-		_, err := tx.ExecContext(ctx, query, tenantID.String(), key, value)
-		if err != nil {
-			return errx.Wrap(err, "failed to save tenant config setting in batch", errx.TypeInternal).
-				WithDetail("tenant_id", tenantID.String()).
-				WithDetail("key", key)
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return errx.Wrap(err, "failed to commit tenant config batch transaction", errx.TypeInternal)
-	}
-
-	return nil
-}
 package tenantsrv
 
 import (
@@ -4235,12 +3668,6 @@ type Tenant struct {
 	TrialExpiresAt        *time.Time       `db:"trial_expires_at" json:"trial_expires_at,omitempty"`
 	SubscriptionExpiresAt *time.Time       `db:"subscription_expires_at" json:"subscription_expires_at,omitempty"`
 
-	// SIRE API Credentials
-	SireClientID     *string `db:"sire_client_id" json:"-"` // No exponer en JSON por seguridad
-	SireClientSecret *string `db:"sire_client_secret" json:"-"`
-	SireUsername     *string `db:"sire_username" json:"-"`
-	SirePassword     *string `db:"sire_password" json:"-"`
-
 	CreatedAt time.Time `db:"created_at" json:"created_at"`
 	UpdatedAt time.Time `db:"updated_at" json:"updated_at"`
 }
@@ -4344,69 +3771,31 @@ func (t *Tenant) getMaxUsersForPlan(plan SubscriptionPlan) int {
 	}
 }
 
-// HasSireCredentials verifica si el tenant tiene credenciales SIRE configuradas
-func (t *Tenant) HasSireCredentials() bool {
-	return t.SireClientID != nil && *t.SireClientID != "" &&
-		t.SireClientSecret != nil && *t.SireClientSecret != "" &&
-		t.SireUsername != nil && *t.SireUsername != "" &&
-		t.SirePassword != nil && *t.SirePassword != ""
-}
-
-// SetSireCredentials establece las credenciales SIRE
-func (t *Tenant) SetSireCredentials(clientID, clientSecret, username, password string) {
-	t.SireClientID = &clientID
-	t.SireClientSecret = &clientSecret
-	t.SireUsername = &username
-	t.SirePassword = &password
-	t.UpdatedAt = time.Now()
-}
-
-// ClearSireCredentials limpia las credenciales SIRE
-func (t *Tenant) ClearSireCredentials() {
-	t.SireClientID = nil
-	t.SireClientSecret = nil
-	t.SireUsername = nil
-	t.SirePassword = nil
-	t.UpdatedAt = time.Now()
-}
-
-// GetSireCredentials retorna las credenciales SIRE (usar con cuidado)
-func (t *Tenant) GetSireCredentials() (clientID, clientSecret, username, password string, ok bool) {
-	if !t.HasSireCredentials() {
-		return "", "", "", "", false
-	}
-	return *t.SireClientID, *t.SireClientSecret, *t.SireUsername, *t.SirePassword, true
-}
-
 // ============================================================================
 // DTOs
 // ============================================================================
 
 // TenantDetailsDTO contiene información básica de un tenant para otros módulos
 type TenantDetailsDTO struct {
-	ID                   kernel.TenantID  `json:"id"`
-	CompanyName          string           `json:"company_name"`
-	RUC                  string           `json:"ruc"`
-	Status               TenantStatus     `json:"status"`
-	SubscriptionPlan     SubscriptionPlan `json:"subscription_plan"`
-	MaxUsers             int              `json:"max_users"`
-	CurrentUsers         int              `json:"current_users"`
-	HasSireCredentials   bool             `json:"has_sire_credentials"`
-	SireCredentialsValid bool             `json:"sire_credentials_valid,omitempty"`
+	ID               kernel.TenantID  `json:"id"`
+	CompanyName      string           `json:"company_name"`
+	RUC              string           `json:"ruc"`
+	Status           TenantStatus     `json:"status"`
+	SubscriptionPlan SubscriptionPlan `json:"subscription_plan"`
+	MaxUsers         int              `json:"max_users"`
+	CurrentUsers     int              `json:"current_users"`
 }
 
 // ToDTO convierte la entidad Tenant a TenantDetailsDTO
 func (t *Tenant) ToDTO() TenantDetailsDTO {
 	return TenantDetailsDTO{
-		ID:                   t.ID,
-		CompanyName:          t.CompanyName,
-		RUC:                  t.RUC,
-		Status:               t.Status,
-		SubscriptionPlan:     t.SubscriptionPlan,
-		MaxUsers:             t.MaxUsers,
-		CurrentUsers:         t.CurrentUsers,
-		HasSireCredentials:   t.HasSireCredentials(),
-		SireCredentialsValid: t.HasSireCredentials(), // Puedes agregar validación adicional aquí
+		ID:               t.ID,
+		CompanyName:      t.CompanyName,
+		RUC:              t.RUC,
+		Status:           t.Status,
+		SubscriptionPlan: t.SubscriptionPlan,
+		MaxUsers:         t.MaxUsers,
+		CurrentUsers:     t.CurrentUsers,
 	}
 }
 
@@ -4425,38 +3814,6 @@ type CreateTenantRequest struct {
 type UpdateTenantRequest struct {
 	CompanyName *string       `json:"company_name,omitempty" validate:"omitempty,min=2"`
 	Status      *TenantStatus `json:"status,omitempty"`
-}
-
-// SetSireCredentialsRequest para configurar credenciales SIRE
-type SetSireCredentialsRequest struct {
-	ClientID     string `json:"client_id" validate:"required,min=10"`
-	ClientSecret string `json:"client_secret" validate:"required,min=10"`
-	Username     string `json:"username" validate:"required,min=5"`
-	Password     string `json:"password" validate:"required,min=6"`
-}
-
-// SireCredentialsResponse respuesta con información de credenciales SIRE (sin datos sensibles)
-type SireCredentialsResponse struct {
-	HasCredentials bool   `json:"has_credentials"`
-	ClientID       string `json:"client_id,omitempty"` // Solo mostrar si existe
-	Username       string `json:"username,omitempty"`  // Solo mostrar si existe
-	ConfiguredAt   string `json:"configured_at,omitempty"`
-}
-
-// ToSireCredentialsResponse convierte el tenant a respuesta de credenciales
-func (t *Tenant) ToSireCredentialsResponse() SireCredentialsResponse {
-	resp := SireCredentialsResponse{
-		HasCredentials: t.HasSireCredentials(),
-	}
-
-	if t.HasSireCredentials() {
-		// Solo mostrar información no sensible
-		resp.ClientID = *t.SireClientID
-		resp.Username = *t.SireUsername
-		resp.ConfiguredAt = t.UpdatedAt.Format(time.RFC3339)
-	}
-
-	return resp
 }
 
 // TenantResponse representa la respuesta completa de un tenant con configuración
@@ -4541,7 +3898,6 @@ type TenantStatsResponse struct {
 	DaysUntilExpiration   *int            `json:"days_until_expiration,omitempty"`
 	IsTrialExpired        bool            `json:"is_trial_expired"`
 	IsSubscriptionExpired bool            `json:"is_subscription_expired"`
-	HasSireIntegration    bool            `json:"has_sire_integration"`
 }
 
 // TenantHealthResponse para el estado de salud del tenant
@@ -4591,17 +3947,15 @@ var ErrRegistry = errx.NewRegistry("TENANT")
 
 // Códigos de error
 var (
-	CodeTenantNotFound         = ErrRegistry.Register("NOT_FOUND", errx.TypeNotFound, http.StatusNotFound, "Empresa no encontrada")
-	CodeTenantAlreadyExists    = ErrRegistry.Register("ALREADY_EXISTS", errx.TypeConflict, http.StatusConflict, "La empresa ya existe")
-	CodeTenantSuspended        = ErrRegistry.Register("SUSPENDED", errx.TypeBusiness, http.StatusForbidden, "Empresa suspendida")
-	CodeTrialExpired           = ErrRegistry.Register("TRIAL_EXPIRED", errx.TypeBusiness, http.StatusPaymentRequired, "Período de prueba expirado")
-	CodeSubscriptionExpired    = ErrRegistry.Register("SUBSCRIPTION_EXPIRED", errx.TypeBusiness, http.StatusPaymentRequired, "Suscripción expirada")
-	CodeMaxUsersReached        = ErrRegistry.Register("MAX_USERS_REACHED", errx.TypeBusiness, http.StatusForbidden, "Máximo de usuarios alcanzado")
-	CodeTooManyUsersForPlan    = ErrRegistry.Register("TOO_MANY_USERS_FOR_PLAN", errx.TypeBusiness, http.StatusBadRequest, "El nuevo plan no permite tantos usuarios")
-	CodeTenantHasUsers         = ErrRegistry.Register("TENANT_HAS_USERS", errx.TypeBusiness, http.StatusConflict, "No se puede eliminar tenant con usuarios activos")
-	CodeInvalidPlanUpgrade     = ErrRegistry.Register("INVALID_PLAN_UPGRADE", errx.TypeBusiness, http.StatusBadRequest, "Actualización de plan inválida")
-	CodeSireCredentialsInvalid = ErrRegistry.Register("SIRE_CREDENTIALS_INVALID", errx.TypeValidation, http.StatusBadRequest, "Credenciales SIRE inválidas")
-	CodeSireCredentialsNotSet  = ErrRegistry.Register("SIRE_CREDENTIALS_NOT_SET", errx.TypeBusiness, http.StatusPreconditionRequired, "Credenciales SIRE no configuradas")
+	CodeTenantNotFound      = ErrRegistry.Register("NOT_FOUND", errx.TypeNotFound, http.StatusNotFound, "Empresa no encontrada")
+	CodeTenantAlreadyExists = ErrRegistry.Register("ALREADY_EXISTS", errx.TypeConflict, http.StatusConflict, "La empresa ya existe")
+	CodeTenantSuspended     = ErrRegistry.Register("SUSPENDED", errx.TypeBusiness, http.StatusForbidden, "Empresa suspendida")
+	CodeTrialExpired        = ErrRegistry.Register("TRIAL_EXPIRED", errx.TypeBusiness, http.StatusPaymentRequired, "Período de prueba expirado")
+	CodeSubscriptionExpired = ErrRegistry.Register("SUBSCRIPTION_EXPIRED", errx.TypeBusiness, http.StatusPaymentRequired, "Suscripción expirada")
+	CodeMaxUsersReached     = ErrRegistry.Register("MAX_USERS_REACHED", errx.TypeBusiness, http.StatusForbidden, "Máximo de usuarios alcanzado")
+	CodeTooManyUsersForPlan = ErrRegistry.Register("TOO_MANY_USERS_FOR_PLAN", errx.TypeBusiness, http.StatusBadRequest, "El nuevo plan no permite tantos usuarios")
+	CodeTenantHasUsers      = ErrRegistry.Register("TENANT_HAS_USERS", errx.TypeBusiness, http.StatusConflict, "No se puede eliminar tenant con usuarios activos")
+	CodeInvalidPlanUpgrade  = ErrRegistry.Register("INVALID_PLAN_UPGRADE", errx.TypeBusiness, http.StatusBadRequest, "Actualización de plan inválida")
 )
 
 // Helper functions para crear errores
@@ -4640,15 +3994,6 @@ func ErrTenantHasUsers() *errx.Error {
 func ErrInvalidPlanUpgrade() *errx.Error {
 	return ErrRegistry.New(CodeInvalidPlanUpgrade)
 }
-
-func ErrSireCredentialsInvalid() *errx.Error {
-	return ErrRegistry.New(CodeSireCredentialsInvalid)
-}
-
-func ErrSireCredentialsNotSet() *errx.Error {
-	return ErrRegistry.New(CodeSireCredentialsNotSet)
-}
-
 package iam
 
 import (
@@ -7589,20 +6934,122 @@ import (
 	"github.com/Abraxas-365/relay/pkg/kernel"
 )
 
+// ============================================================================
+// Repository Interface
+// ============================================================================
+
+// ParserRepository define el contrato para persistencia de parsers
 type ParserRepository interface {
-	Save(ctx context.Context, p Parser) error
-	FindByID(ctx context.Context, id kernel.ParserID) (*Parser, error)
+	// CRUD básico
+	Save(ctx context.Context, parser Parser) error
+	FindByID(ctx context.Context, id kernel.ParserID, tenantID kernel.TenantID) (*Parser, error)
+	FindByName(ctx context.Context, name string, tenantID kernel.TenantID) (*Parser, error)
+	Delete(ctx context.Context, id kernel.ParserID, tenantID kernel.TenantID) error
+	ExistsByName(ctx context.Context, name string, tenantID kernel.TenantID) (bool, error)
+
+	// Búsquedas
 	FindByTenant(ctx context.Context, tenantID kernel.TenantID) ([]*Parser, error)
+	FindByType(ctx context.Context, parserType ParserType, tenantID kernel.TenantID) ([]*Parser, error)
+	FindActive(ctx context.Context, tenantID kernel.TenantID) ([]*Parser, error)
+	FindByPriority(ctx context.Context, tenantID kernel.TenantID) ([]*Parser, error) // Ordenado por prioridad desc
+
+	// List con paginación
+	List(ctx context.Context, req ListParsersRequest) (ParserListResponse, error)
+
+	// Bulk operations
+	BulkUpdateStatus(ctx context.Context, ids []kernel.ParserID, tenantID kernel.TenantID, isActive bool) error
 }
 
-// ParserEngine ejecuta parsers
+// ============================================================================
+// Engine Interface
+// ============================================================================
+
+// ParserEngine ejecuta parsers según su tipo
 type ParserEngine interface {
+	// Parse procesa un mensaje con un parser específico
 	Parse(ctx context.Context, parser Parser, message engine.Message, session *engine.Session) (*ParseResult, error)
+
+	// Soporta el tipo de parser
+	SupportsType(parserType ParserType) bool
+
+	// Validar configuración del parser
+	ValidateConfig(parserType ParserType, config ParserConfig) error
 }
 
-// ParserSelector decide qué parser usar
+// ============================================================================
+// Selector Interface
+// ============================================================================
+
+// ParserSelector selecciona el parser apropiado para un mensaje
 type ParserSelector interface {
-	SelectParser(ctx context.Context, message engine.Message, availableParsers []*Parser) (*Parser, error)
+	// SelectParser selecciona el mejor parser para un mensaje
+	SelectParser(ctx context.Context, selectionCtx *SelectionContext) (*Parser, error)
+
+	// SelectParsers selecciona múltiples parsers (para cascada)
+	SelectParsers(ctx context.Context, selectionCtx *SelectionContext, maxParsers int) ([]*Parser, error)
+
+	// ShouldRetry determina si se debe intentar con otro parser
+	ShouldRetry(ctx context.Context, result *ParseResult) bool
+}
+
+// ============================================================================
+// Orchestrator Interface
+// ============================================================================
+
+// ParserOrchestrator orquesta la ejecución de múltiples parsers
+type ParserOrchestrator interface {
+	// Process procesa un mensaje con la cadena de parsers apropiada
+	Process(ctx context.Context, message engine.Message, session *engine.Session) (*ParseResult, error)
+
+	// ProcessWithParser procesa con un parser específico
+	ProcessWithParser(ctx context.Context, parserID kernel.ParserID, message engine.Message, session *engine.Session) (*ParseResult, error)
+
+	// ProcessCascade procesa en cascada hasta encontrar un resultado exitoso
+	ProcessCascade(ctx context.Context, message engine.Message, session *engine.Session, maxAttempts int) (*ParseResult, error)
+}
+
+// ============================================================================
+// Validator Interface
+// ============================================================================
+
+// ParserValidator valida parsers
+type ParserValidator interface {
+	// ValidateParser valida un parser completo
+	ValidateParser(parser Parser) error
+
+	// ValidateConfig valida configuración por tipo
+	ValidateConfig(parserType ParserType, config ParserConfig) error
+
+	// ValidateRegexPatterns valida patrones regex
+	ValidateRegexPatterns(patterns []RegexPattern) error
+
+	// ValidateRules valida reglas
+	ValidateRules(rules []Rule) error
+
+	// ValidateActions valida acciones
+	ValidateActions(actions []Action) error
+}
+
+// ============================================================================
+// Cache Interface
+// ============================================================================
+
+// ParserCache cachea resultados de parsing
+type ParserCache interface {
+	// Get obtiene resultado cacheado
+	Get(ctx context.Context, cacheKey string) (*ParseResult, error)
+
+	// Set guarda resultado en cache
+	Set(ctx context.Context, cacheKey string, result *ParseResult, ttl int) error
+
+	// Delete elimina del cache
+	Delete(ctx context.Context, cacheKey string) error
+
+	// Clear limpia cache de un tenant
+	Clear(ctx context.Context, tenantID kernel.TenantID) error
+
+	// GenerateKey genera una clave de cache
+	GenerateKey(message engine.Message, parserID kernel.ParserID) string
 }
 package parser
 
@@ -8788,16 +8235,6 @@ type RedisConfig struct {
 	DB       int
 }
 
-// SIREConfig configuración de SIRE
-type SIREConfig struct {
-	BaseURL      string
-	SecurityURL  string
-	ClientID     string
-	ClientSecret string
-	Username     string
-	Password     string
-}
-
 // Load carga la configuración desde variables de entorno
 func Load() (*Config, error) {
 	// Cargar .env si existe
@@ -9567,69 +9004,901 @@ package channelsrv
 
 import (
 	"context"
-	"fmt"
+	"time"
 
+	"github.com/Abraxas-365/craftable/errx"
 	"github.com/Abraxas-365/relay/channels"
+	"github.com/Abraxas-365/relay/iam/tenant"
+	"github.com/Abraxas-365/relay/pkg/kernel"
+	"github.com/google/uuid"
+)
+
+// ChannelService proporciona operaciones de negocio para canales
+type ChannelService struct {
+	channelRepo    channels.ChannelRepository
+	tenantRepo     tenant.TenantRepository
+	channelManager channels.ChannelManager
+}
+
+// NewChannelService crea una nueva instancia del servicio de canales
+func NewChannelService(
+	channelRepo channels.ChannelRepository,
+	tenantRepo tenant.TenantRepository,
+	channelManager channels.ChannelManager,
+) *ChannelService {
+	return &ChannelService{
+		channelRepo:    channelRepo,
+		tenantRepo:     tenantRepo,
+		channelManager: channelManager,
+	}
+}
+
+// ============================================================================
+// CRUD Operations
+// ============================================================================
+
+// CreateChannel crea un nuevo canal
+func (s *ChannelService) CreateChannel(ctx context.Context, req channels.CreateChannelRequest) (*channels.Channel, error) {
+	// Verificar que el tenant exista y esté activo
+	tenantEntity, err := s.tenantRepo.FindByID(ctx, req.TenantID)
+	if err != nil {
+		return nil, tenant.ErrTenantNotFound()
+	}
+
+	if !tenantEntity.IsActive() {
+		return nil, tenant.ErrTenantSuspended()
+	}
+
+	// Verificar que no exista un canal con el mismo nombre
+	exists, err := s.channelRepo.ExistsByName(ctx, req.Name, req.TenantID)
+	if err != nil {
+		return nil, errx.Wrap(err, "failed to check channel name existence", errx.TypeInternal)
+	}
+	if exists {
+		return nil, channels.ErrChannelAlreadyExists().WithDetail("name", req.Name)
+	}
+
+	// Generar webhook URL
+	webhookURL := s.generateWebhookURL(req.TenantID, req.Type)
+
+	// Crear canal usando el helper
+	newChannel, err := channels.NewChannelFromConfig(
+		kernel.NewChannelID(uuid.NewString()),
+		req.TenantID,
+		req.Name,
+		req.Description,
+		req.Config,
+		webhookURL,
+	)
+	if err != nil {
+		return nil, errx.Wrap(err, "failed to create channel", errx.TypeInternal)
+	}
+
+	// Validar config usando el adapter si está disponible
+	if adapter, err := s.channelManager.GetAdapter(newChannel.Type); err == nil {
+		if err := adapter.ValidateConfig(req.Config); err != nil {
+			return nil, channels.ErrInvalidChannelConfig().
+				WithDetail("reason", err.Error())
+		}
+	}
+
+	// Guardar canal
+	if err := s.channelRepo.Save(ctx, *newChannel); err != nil {
+		return nil, errx.Wrap(err, "failed to save channel", errx.TypeInternal)
+	}
+
+	// Registrar en el channel manager
+	if err := s.channelManager.RegisterChannel(ctx, *newChannel); err != nil {
+		// Log error but don't fail
+		// logger.Error("Failed to register channel in manager", err)
+	}
+
+	return newChannel, nil
+}
+
+// GetChannelByID obtiene un canal por ID
+func (s *ChannelService) GetChannelByID(ctx context.Context, channelID kernel.ChannelID, tenantID kernel.TenantID) (*channels.ChannelResponse, error) {
+	channel, err := s.channelRepo.FindByID(ctx, channelID, tenantID)
+	if err != nil {
+		return nil, channels.ErrChannelNotFound().WithDetail("channel_id", channelID.String())
+	}
+
+	features, err := channel.GetFeatures()
+	if err != nil {
+		// Return channel without features
+		features = channels.ChannelFeatures{}
+	}
+
+	return &channels.ChannelResponse{
+		Channel:  *channel,
+		Features: features,
+	}, nil
+}
+
+// GetChannelByName obtiene un canal por nombre
+func (s *ChannelService) GetChannelByName(ctx context.Context, name string, tenantID kernel.TenantID) (*channels.ChannelResponse, error) {
+	channel, err := s.channelRepo.FindByName(ctx, name, tenantID)
+	if err != nil {
+		return nil, channels.ErrChannelNotFound().WithDetail("name", name)
+	}
+
+	features, _ := channel.GetFeatures()
+
+	return &channels.ChannelResponse{
+		Channel:  *channel,
+		Features: features,
+	}, nil
+}
+
+// GetChannelsByTenant obtiene todos los canales de un tenant
+func (s *ChannelService) GetChannelsByTenant(ctx context.Context, tenantID kernel.TenantID) ([]*channels.Channel, error) {
+	return s.channelRepo.FindByTenant(ctx, tenantID)
+}
+
+// GetActiveChannels obtiene canales activos de un tenant
+func (s *ChannelService) GetActiveChannels(ctx context.Context, tenantID kernel.TenantID) ([]*channels.Channel, error) {
+	return s.channelRepo.FindActive(ctx, tenantID)
+}
+
+// GetChannelsByType obtiene canales por tipo
+func (s *ChannelService) GetChannelsByType(ctx context.Context, channelType channels.ChannelType, tenantID kernel.TenantID) ([]*channels.Channel, error) {
+	return s.channelRepo.FindByType(ctx, channelType, tenantID)
+}
+
+// UpdateChannel actualiza un canal
+func (s *ChannelService) UpdateChannel(ctx context.Context, channelID kernel.ChannelID, req channels.UpdateChannelRequest, tenantID kernel.TenantID) (*channels.Channel, error) {
+	channel, err := s.channelRepo.FindByID(ctx, channelID, tenantID)
+	if err != nil {
+		return nil, channels.ErrChannelNotFound().WithDetail("channel_id", channelID.String())
+	}
+
+	// Actualizar campos si se proporcionaron
+	if req.Name != nil {
+		// Verificar que no exista otro canal con el mismo nombre
+		if *req.Name != channel.Name {
+			exists, err := s.channelRepo.ExistsByName(ctx, *req.Name, tenantID)
+			if err != nil {
+				return nil, errx.Wrap(err, "failed to check channel name", errx.TypeInternal)
+			}
+			if exists {
+				return nil, channels.ErrChannelAlreadyExists().WithDetail("name", *req.Name)
+			}
+		}
+		channel.Name = *req.Name
+	}
+
+	if req.Description != nil {
+		channel.Description = *req.Description
+	}
+
+	if req.Config != nil {
+		// Validar config
+		if adapter, err := s.channelManager.GetAdapter(channel.Type); err == nil {
+			if err := adapter.ValidateConfig(*req.Config); err != nil {
+				return nil, channels.ErrInvalidChannelConfig().WithDetail("reason", err.Error())
+			}
+		}
+
+		if err := channel.UpdateConfig(*req.Config); err != nil {
+			return nil, errx.Wrap(err, "failed to update config", errx.TypeInternal)
+		}
+	}
+
+	if req.IsActive != nil {
+		if *req.IsActive {
+			channel.Activate()
+		} else {
+			channel.Deactivate()
+		}
+	}
+
+	channel.UpdatedAt = time.Now()
+
+	// Guardar cambios
+	if err := s.channelRepo.Save(ctx, *channel); err != nil {
+		return nil, errx.Wrap(err, "failed to update channel", errx.TypeInternal)
+	}
+
+	return channel, nil
+}
+
+// ActivateChannel activa un canal
+func (s *ChannelService) ActivateChannel(ctx context.Context, channelID kernel.ChannelID, tenantID kernel.TenantID) error {
+	channel, err := s.channelRepo.FindByID(ctx, channelID, tenantID)
+	if err != nil {
+		return channels.ErrChannelNotFound().WithDetail("channel_id", channelID.String())
+	}
+
+	channel.Activate()
+	return s.channelRepo.Save(ctx, *channel)
+}
+
+// DeactivateChannel desactiva un canal
+func (s *ChannelService) DeactivateChannel(ctx context.Context, channelID kernel.ChannelID, tenantID kernel.TenantID) error {
+	channel, err := s.channelRepo.FindByID(ctx, channelID, tenantID)
+	if err != nil {
+		return channels.ErrChannelNotFound().WithDetail("channel_id", channelID.String())
+	}
+
+	channel.Deactivate()
+	return s.channelRepo.Save(ctx, *channel)
+}
+
+// DeleteChannel elimina un canal
+func (s *ChannelService) DeleteChannel(ctx context.Context, channelID kernel.ChannelID, tenantID kernel.TenantID) error {
+	// Verificar que el canal existe
+	_, err := s.channelRepo.FindByID(ctx, channelID, tenantID)
+	if err != nil {
+		return channels.ErrChannelNotFound().WithDetail("channel_id", channelID.String())
+	}
+
+	// Eliminar canal
+	return s.channelRepo.Delete(ctx, channelID, tenantID)
+}
+
+// ============================================================================
+// Messaging Operations
+// ============================================================================
+
+// SendMessage envía un mensaje a través de un canal
+func (s *ChannelService) SendMessage(ctx context.Context, channelID kernel.ChannelID, msg channels.OutgoingMessage) (*channels.SendMessageResponse, error) {
+	// Verificar que el canal existe y está activo
+	channel, err := s.channelRepo.FindByID(ctx, channelID, msg.Metadata["tenant_id"].(kernel.TenantID))
+	if err != nil {
+		return nil, channels.ErrChannelNotFound().WithDetail("channel_id", channelID.String())
+	}
+
+	if !channel.IsActive {
+		return nil, channels.ErrChannelInactive().WithDetail("channel_id", channelID.String())
+	}
+
+	// Enviar mensaje usando el channel manager
+	startTime := time.Now()
+	if err := s.channelManager.SendMessage(ctx, channelID, msg); err != nil {
+		return &channels.SendMessageResponse{
+			Success:   false,
+			Timestamp: time.Now().Unix(),
+			Error:     err.Error(),
+		}, err
+	}
+
+	return &channels.SendMessageResponse{
+		Success:   true,
+		Timestamp: time.Now().Unix(),
+		Metadata: map[string]any{
+			"processing_time_ms": time.Since(startTime).Milliseconds(),
+		},
+	}, nil
+}
+
+// TestChannel prueba la conexión de un canal
+func (s *ChannelService) TestChannel(ctx context.Context, channelID kernel.ChannelID, tenantID kernel.TenantID) (*channels.TestChannelResponse, error) {
+	channel, err := s.channelRepo.FindByID(ctx, channelID, tenantID)
+	if err != nil {
+		return nil, channels.ErrChannelNotFound().WithDetail("channel_id", channelID.String())
+	}
+
+	// Obtener adapter
+	adapter, err := s.channelManager.GetAdapter(channel.Type)
+	if err != nil {
+		return &channels.TestChannelResponse{
+			Success: false,
+			Message: "Adapter not available",
+			Error:   err.Error(),
+		}, err
+	}
+
+	// Probar conexión
+	startTime := time.Now()
+	config, err := channel.GetConfigStruct()
+	if err != nil {
+		return &channels.TestChannelResponse{
+			Success: false,
+			Message: "Invalid channel configuration",
+			Error:   err.Error(),
+		}, err
+	}
+
+	if err := adapter.TestConnection(ctx, config); err != nil {
+		return &channels.TestChannelResponse{
+			Success:      false,
+			Message:      "Connection test failed",
+			ResponseTime: time.Since(startTime).Milliseconds(),
+			Error:        err.Error(),
+		}, err
+	}
+
+	return &channels.TestChannelResponse{
+		Success:      true,
+		Message:      "Connection test successful",
+		ResponseTime: time.Since(startTime).Milliseconds(),
+	}, nil
+}
+
+// ============================================================================
+// Bulk Operations
+// ============================================================================
+
+// BulkActivateChannels activa múltiples canales
+func (s *ChannelService) BulkActivateChannels(ctx context.Context, channelIDs []kernel.ChannelID, tenantID kernel.TenantID) (*channels.BulkChannelOperationResponse, error) {
+	result := &channels.BulkChannelOperationResponse{
+		Successful: []kernel.ChannelID{},
+		Failed:     make(map[kernel.ChannelID]string),
+		Total:      len(channelIDs),
+	}
+
+	for _, channelID := range channelIDs {
+		if err := s.ActivateChannel(ctx, channelID, tenantID); err != nil {
+			result.Failed[channelID] = err.Error()
+		} else {
+			result.Successful = append(result.Successful, channelID)
+		}
+	}
+
+	return result, nil
+}
+
+// BulkDeactivateChannels desactiva múltiples canales
+func (s *ChannelService) BulkDeactivateChannels(ctx context.Context, channelIDs []kernel.ChannelID, tenantID kernel.TenantID) (*channels.BulkChannelOperationResponse, error) {
+	result := &channels.BulkChannelOperationResponse{
+		Successful: []kernel.ChannelID{},
+		Failed:     make(map[kernel.ChannelID]string),
+		Total:      len(channelIDs),
+	}
+
+	for _, channelID := range channelIDs {
+		if err := s.DeactivateChannel(ctx, channelID, tenantID); err != nil {
+			result.Failed[channelID] = err.Error()
+		} else {
+			result.Successful = append(result.Successful, channelID)
+		}
+	}
+
+	return result, nil
+}
+
+// ============================================================================
+// Helper Methods
+// ============================================================================
+
+// generateWebhookURL genera una URL de webhook para el canal
+func (s *ChannelService) generateWebhookURL(tenantID kernel.TenantID, channelType channels.ChannelType) string {
+	// En producción, esto debería usar la configuración real del servidor
+	baseURL := "https://api.yourdomain.com" // O desde config
+	return baseURL + "/webhooks/channels/" + string(channelType) + "/" + tenantID.String()
+}
+package channels
+
+import (
+	"context"
+
 	"github.com/Abraxas-365/relay/pkg/kernel"
 )
 
-type ChannelManagerService struct {
-	channelRepo channels.ChannelRepository
-	adapters    map[channels.ChannelType]channels.ChannelAdapter
+// ============================================================================
+// Repository Interfaces
+// ============================================================================
+
+// ChannelRepository define el contrato para persistencia de canales
+type ChannelRepository interface {
+	// CRUD básico
+	Save(ctx context.Context, channel Channel) error
+	FindByID(ctx context.Context, id kernel.ChannelID, tenantID kernel.TenantID) (*Channel, error)
+	FindByName(ctx context.Context, name string, tenantID kernel.TenantID) (*Channel, error)
+	Delete(ctx context.Context, id kernel.ChannelID, tenantID kernel.TenantID) error
+	ExistsByName(ctx context.Context, name string, tenantID kernel.TenantID) (bool, error)
+
+	// Búsquedas específicas
+	FindByTenant(ctx context.Context, tenantID kernel.TenantID) ([]*Channel, error)
+	FindByType(ctx context.Context, channelType ChannelType, tenantID kernel.TenantID) ([]*Channel, error)
+	FindActive(ctx context.Context, tenantID kernel.TenantID) ([]*Channel, error)
+	FindByProvider(ctx context.Context, provider string, tenantID kernel.TenantID) ([]*Channel, error)
+
+	// List con paginación
+	List(ctx context.Context, req ListChannelsRequest) (ChannelListResponse, error)
+
+	// Bulk operations
+	BulkUpdateStatus(ctx context.Context, ids []kernel.ChannelID, tenantID kernel.TenantID, isActive bool) error
+
+	// Stats
+	CountByType(ctx context.Context, channelType ChannelType, tenantID kernel.TenantID) (int, error)
+	CountByTenant(ctx context.Context, tenantID kernel.TenantID) (int, error)
 }
 
-func NewChannelManager(repo channels.ChannelRepository) *ChannelManagerService {
-	return &ChannelManagerService{
-		channelRepo: repo,
-		adapters:    make(map[channels.ChannelType]channels.ChannelAdapter),
-	}
+// ============================================================================
+// Adapter Interfaces
+// ============================================================================
+
+// ChannelAdapter interfaz para adaptadores de canal específicos
+type ChannelAdapter interface {
+	// GetType retorna el tipo de canal que maneja
+	GetType() ChannelType
+
+	// SendMessage envía un mensaje a través del canal
+	SendMessage(ctx context.Context, msg OutgoingMessage) error
+
+	// ValidateConfig valida la configuración del canal
+	ValidateConfig(config ChannelConfig) error
+
+	// ProcessWebhook procesa webhooks entrantes del proveedor
+	ProcessWebhook(ctx context.Context, payload []byte, headers map[string]string) (*IncomingMessage, error)
+
+	// GetFeatures retorna las características soportadas
+	GetFeatures() ChannelFeatures
+
+	// TestConnection prueba la conexión con el proveedor
+	TestConnection(ctx context.Context, config ChannelConfig) error
 }
 
-func (cm *ChannelManagerService) RegisterAdapter(adapter channels.ChannelAdapter) {
-	cm.adapters[adapter.GetType()] = adapter
-}
+// ============================================================================
+// Manager Interfaces
+// ============================================================================
 
-func (cm *ChannelManagerService) RegisterChannel(ctx context.Context, ch channels.Channel) error {
-	// Validar config con adapter
-	adapter, err := cm.GetAdapter(ch.Type)
-	if err != nil {
-		return err
-	}
+// ChannelManager gestiona operaciones de alto nivel con canales
+type ChannelManager interface {
+	// RegisterChannel registra un nuevo canal
+	RegisterChannel(ctx context.Context, channel Channel) error
 
-	if err := adapter.ValidateConfig(ch.Config); err != nil {
-		return fmt.Errorf("invalid channel config: %w", err)
-	}
+	// SendMessage envía un mensaje a través de un canal
+	SendMessage(ctx context.Context, channelID kernel.ChannelID, msg OutgoingMessage) error
 
-	return cm.channelRepo.Save(ctx, ch)
-}
+	// ProcessIncomingMessage procesa un mensaje entrante
+	ProcessIncomingMessage(ctx context.Context, channelID kernel.ChannelID, msg IncomingMessage) error
 
-func (cm *ChannelManagerService) SendMessage(ctx context.Context, channelID kernel.ChannelID, msg channels.OutgoingMessage) error {
-	// 1. Buscar canal
-	channel, err := cm.channelRepo.FindByID(ctx, channelID)
-	if err != nil {
-		return err
-	}
+	// GetAdapter obtiene el adapter para un tipo de canal
+	GetAdapter(channelType ChannelType) (ChannelAdapter, error)
 
-	// 2. Obtener adapter
-	adapter, err := cm.GetAdapter(channel.Type)
-	if err != nil {
-		return err
-	}
+	// RegisterAdapter registra un adapter
+	RegisterAdapter(adapter ChannelAdapter)
 
-	// 3. Enviar mensaje
-	return adapter.SendMessage(ctx, msg)
-}
-
-func (cm *ChannelManagerService) GetAdapter(channelType channels.ChannelType) (channels.ChannelAdapter, error) {
-	adapter, exists := cm.adapters[channelType]
-	if !exists {
-		return nil, fmt.Errorf("adapter not found for channel type: %s", channelType)
-	}
-	return adapter, nil
+	// TestChannel prueba la conexión de un canal
+	TestChannel(ctx context.Context, channelID kernel.ChannelID) error
 }
 package channels
+
+import (
+	"github.com/Abraxas-365/craftable/storex"
+	"github.com/Abraxas-365/relay/pkg/kernel"
+)
+
+// ============================================================================
+// Message DTOs
+// ============================================================================
+
+// OutgoingMessage mensaje saliente a enviar por el canal
+type OutgoingMessage struct {
+	RecipientID string            `json:"recipient_id" validate:"required"`
+	Content     MessageContent    `json:"content" validate:"required"`
+	Metadata    map[string]any    `json:"metadata,omitempty"`
+	ReplyToID   string            `json:"reply_to_id,omitempty"`
+	TemplateID  string            `json:"template_id,omitempty"`
+	Variables   map[string]string `json:"variables,omitempty"`
+}
+
+// IncomingMessage mensaje entrante recibido del canal
+type IncomingMessage struct {
+	MessageID  string           `json:"message_id"`
+	ChannelID  kernel.ChannelID `json:"channel_id"`
+	SenderID   string           `json:"sender_id"`
+	Content    MessageContent   `json:"content"`
+	Timestamp  int64            `json:"timestamp"`
+	Metadata   map[string]any   `json:"metadata,omitempty"`
+	RawPayload map[string]any   `json:"raw_payload,omitempty"`
+}
+
+// MessageContent contenido del mensaje
+type MessageContent struct {
+	Type        string         `json:"type"` // text, image, audio, video, document, location, contact
+	Text        string         `json:"text,omitempty"`
+	MediaURL    string         `json:"media_url,omitempty"`
+	Caption     string         `json:"caption,omitempty"`
+	MimeType    string         `json:"mime_type,omitempty"`
+	Filename    string         `json:"filename,omitempty"`
+	Attachments []Attachment   `json:"attachments,omitempty"`
+	Location    *Location      `json:"location,omitempty"`
+	Contact     *Contact       `json:"contact,omitempty"`
+	Interactive *Interactive   `json:"interactive,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+}
+
+// Attachment archivo adjunto
+type Attachment struct {
+	Type     string `json:"type"` // image, audio, video, document
+	URL      string `json:"url"`
+	MimeType string `json:"mime_type,omitempty"`
+	Filename string `json:"filename,omitempty"`
+	Size     int64  `json:"size,omitempty"`
+	Caption  string `json:"caption,omitempty"`
+}
+
+// Location ubicación geográfica
+type Location struct {
+	Latitude  float64 `json:"latitude"`
+	Longitude float64 `json:"longitude"`
+	Name      string  `json:"name,omitempty"`
+	Address   string  `json:"address,omitempty"`
+}
+
+// Contact contacto compartido
+type Contact struct {
+	Name         string `json:"name"`
+	PhoneNumber  string `json:"phone_number,omitempty"`
+	Email        string `json:"email,omitempty"`
+	Organization string `json:"organization,omitempty"`
+}
+
+// Interactive mensaje interactivo (botones, listas, etc)
+type Interactive struct {
+	Type    string   `json:"type"` // button, list, template
+	Header  string   `json:"header,omitempty"`
+	Body    string   `json:"body"`
+	Footer  string   `json:"footer,omitempty"`
+	Buttons []Button `json:"buttons,omitempty"`
+	Items   []Item   `json:"items,omitempty"`
+}
+
+// Button botón interactivo
+type Button struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	Type  string `json:"type,omitempty"` // reply, url, call
+	URL   string `json:"url,omitempty"`
+	Phone string `json:"phone,omitempty"`
+}
+
+// Item elemento de lista
+type Item struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+}
+
+// ============================================================================
+// Request DTOs
+// ============================================================================
+
+// CreateChannelRequest request para crear un canal
+type CreateChannelRequest struct {
+	TenantID    kernel.TenantID `json:"tenant_id" validate:"required"`
+	Name        string          `json:"name" validate:"required,min=2"`
+	Description string          `json:"description"`
+	Type        ChannelType     `json:"type" validate:"required"`
+	Config      ChannelConfig   `json:"config" validate:"required"`
+}
+
+// UpdateChannelRequest request para actualizar un canal
+type UpdateChannelRequest struct {
+	Name        *string        `json:"name,omitempty"`
+	Description *string        `json:"description,omitempty"`
+	Config      *ChannelConfig `json:"config,omitempty"`
+	IsActive    *bool          `json:"is_active,omitempty"`
+}
+
+// SendMessageRequest request para enviar mensaje
+type SendMessageRequest struct {
+	ChannelID   kernel.ChannelID  `json:"channel_id" validate:"required"`
+	RecipientID string            `json:"recipient_id" validate:"required"`
+	Content     MessageContent    `json:"content" validate:"required"`
+	ReplyToID   string            `json:"reply_to_id,omitempty"`
+	TemplateID  string            `json:"template_id,omitempty"`
+	Variables   map[string]string `json:"variables,omitempty"`
+}
+
+// TestChannelRequest request para probar un canal
+type TestChannelRequest struct {
+	ChannelID   kernel.ChannelID `json:"channel_id" validate:"required"`
+	RecipientID string           `json:"recipient_id" validate:"required"`
+	Message     string           `json:"message"`
+}
+
+// ProcessWebhookRequest request para procesar webhook
+type ProcessWebhookRequest struct {
+	ChannelID kernel.ChannelID  `json:"channel_id" validate:"required"`
+	Payload   map[string]any    `json:"payload" validate:"required"`
+	Headers   map[string]string `json:"headers,omitempty"`
+	Signature string            `json:"signature,omitempty"`
+}
+
+// ============================================================================
+// List Request DTOs
+// ============================================================================
+
+// ListChannelsRequest request para listar canales
+type ListChannelsRequest struct {
+	storex.PaginationOptions
+
+	TenantID kernel.TenantID `json:"tenant_id" validate:"required"`
+	Type     *ChannelType    `json:"type,omitempty"`
+	IsActive *bool           `json:"is_active,omitempty"`
+	Provider *string         `json:"provider,omitempty"`
+	Search   string          `json:"search,omitempty"`
+}
+
+// ============================================================================
+// Response DTOs
+// ============================================================================
+
+// ChannelResponse respuesta con canal
+type ChannelResponse struct {
+	Channel  Channel         `json:"channel"`
+	Features ChannelFeatures `json:"features"`
+	Stats    *ChannelStats   `json:"stats,omitempty"`
+}
+
+// ChannelListResponse lista paginada de canales
+type ChannelListResponse = storex.Paginated[Channel]
+
+// SendMessageResponse respuesta de envío de mensaje
+type SendMessageResponse struct {
+	Success       bool           `json:"success"`
+	MessageID     string         `json:"message_id,omitempty"`
+	ProviderMsgID string         `json:"provider_message_id,omitempty"`
+	Timestamp     int64          `json:"timestamp"`
+	Error         string         `json:"error,omitempty"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
+}
+
+// TestChannelResponse respuesta de prueba de canal
+type TestChannelResponse struct {
+	Success      bool           `json:"success"`
+	Message      string         `json:"message"`
+	ResponseTime int64          `json:"response_time_ms"`
+	ProviderInfo map[string]any `json:"provider_info,omitempty"`
+	Error        string         `json:"error,omitempty"`
+}
+
+// ProcessWebhookResponse respuesta de procesamiento de webhook
+type ProcessWebhookResponse struct {
+	Success   bool            `json:"success"`
+	Message   IncomingMessage `json:"message,omitempty"`
+	Processed bool            `json:"processed"`
+	Error     string          `json:"error,omitempty"`
+}
+
+// ============================================================================
+// Stats DTOs
+// ============================================================================
+
+// ChannelStats estadísticas de un canal
+type ChannelStats struct {
+	ChannelID         kernel.ChannelID `json:"channel_id"`
+	ChannelName       string           `json:"channel_name"`
+	TotalMessagesSent int              `json:"total_messages_sent"`
+	TotalMessagesRecv int              `json:"total_messages_received"`
+	SuccessRate       float64          `json:"success_rate"`
+	AvgResponseTime   float64          `json:"avg_response_time_ms"`
+	LastMessageAt     *string          `json:"last_message_at,omitempty"`
+	ErrorCount        int              `json:"error_count"`
+}
+
+// ChannelUsageResponse uso de canales en un periodo
+type ChannelUsageResponse struct {
+	TenantID         kernel.TenantID         `json:"tenant_id"`
+	Period           string                  `json:"period"` // day, week, month
+	TotalMessages    int                     `json:"total_messages"`
+	MessagesSent     int                     `json:"messages_sent"`
+	MessagesReceived int                     `json:"messages_received"`
+	SuccessRate      float64                 `json:"success_rate"`
+	ChannelBreakdown []ChannelUsageBreakdown `json:"channel_breakdown"`
+}
+
+type ChannelUsageBreakdown struct {
+	ChannelID    kernel.ChannelID `json:"channel_id"`
+	ChannelName  string           `json:"channel_name"`
+	ChannelType  ChannelType      `json:"channel_type"`
+	MessagesSent int              `json:"messages_sent"`
+	MessagesRecv int              `json:"messages_received"`
+	SuccessRate  float64          `json:"success_rate"`
+}
+
+// ============================================================================
+// Bulk Operation DTOs
+// ============================================================================
+
+// BulkChannelOperationRequest request para operaciones masivas
+type BulkChannelOperationRequest struct {
+	TenantID   kernel.TenantID    `json:"tenant_id" validate:"required"`
+	ChannelIDs []kernel.ChannelID `json:"channel_ids" validate:"required,min=1"`
+	Operation  string             `json:"operation" validate:"required,oneof=activate deactivate delete test"`
+}
+
+// BulkChannelOperationResponse respuesta de operación masiva
+type BulkChannelOperationResponse struct {
+	Successful []kernel.ChannelID          `json:"successful"`
+	Failed     map[kernel.ChannelID]string `json:"failed"`
+	Total      int                         `json:"total"`
+}
+
+// ============================================================================
+// Simple DTOs
+// ============================================================================
+
+// ChannelDetailsDTO DTO simplificado de canal
+type ChannelDetailsDTO struct {
+	ID         kernel.ChannelID `json:"id"`
+	Name       string           `json:"name"`
+	Type       ChannelType      `json:"type"`
+	Provider   string           `json:"provider"`
+	IsActive   bool             `json:"is_active"`
+	WebhookURL string           `json:"webhook_url"`
+}
+
+// ToDTO convierte Channel a ChannelDetailsDTO
+func (c *Channel) ToDTO() ChannelDetailsDTO {
+	return ChannelDetailsDTO{
+		ID:         c.ID,
+		Name:       c.Name,
+		Type:       c.Type,
+		Provider:   c.GetProvider(),
+		IsActive:   c.IsActive,
+		WebhookURL: c.WebhookURL,
+	}
+}
+
+// ============================================================================
+// Validation DTOs
+// ============================================================================
+
+// ValidateChannelConfigRequest request para validar config de canal
+type ValidateChannelConfigRequest struct {
+	Type   ChannelType   `json:"type" validate:"required"`
+	Config ChannelConfig `json:"config" validate:"required"`
+}
+
+// ValidateChannelConfigResponse respuesta de validación
+type ValidateChannelConfigResponse struct {
+	IsValid  bool     `json:"is_valid"`
+	Errors   []string `json:"errors,omitempty"`
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+// ChannelFeaturesResponse características de un tipo de canal
+type ChannelFeaturesResponse struct {
+	ChannelType ChannelType     `json:"channel_type"`
+	Features    ChannelFeatures `json:"features"`
+}
+
+// AvailableChannelTypesResponse tipos de canales disponibles
+type AvailableChannelTypesResponse struct {
+	Types []ChannelTypeInfo `json:"types"`
+}
+
+type ChannelTypeInfo struct {
+	Type        ChannelType     `json:"type"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Providers   []string        `json:"providers"`
+	Features    ChannelFeatures `json:"features"`
+}
 package channels
-package channels
+
+import (
+	"net/http"
+
+	"github.com/Abraxas-365/craftable/errx"
+)
+
+// ============================================================================
+// Error Registry
+// ============================================================================
+
+var ErrRegistry = errx.NewRegistry("CHANNEL")
+
+// ============================================================================
+// Error Codes
+// ============================================================================
+
+var (
+	// Channel errors
+	CodeChannelNotFound      = ErrRegistry.Register("NOT_FOUND", errx.TypeNotFound, http.StatusNotFound, "Canal no encontrado")
+	CodeChannelAlreadyExists = ErrRegistry.Register("ALREADY_EXISTS", errx.TypeConflict, http.StatusConflict, "Canal ya existe")
+	CodeInvalidChannelType   = ErrRegistry.Register("INVALID_TYPE", errx.TypeValidation, http.StatusBadRequest, "Tipo de canal inválido")
+	CodeInvalidChannelConfig = ErrRegistry.Register("INVALID_CONFIG", errx.TypeValidation, http.StatusBadRequest, "Configuración de canal inválida")
+	CodeChannelInactive      = ErrRegistry.Register("CHANNEL_INACTIVE", errx.TypeBusiness, http.StatusForbidden, "Canal está inactivo")
+	CodeChannelNotSupported  = ErrRegistry.Register("NOT_SUPPORTED", errx.TypeValidation, http.StatusBadRequest, "Tipo de canal no soportado")
+
+	// Message sending errors
+	CodeMessageSendFailed    = ErrRegistry.Register("MESSAGE_SEND_FAILED", errx.TypeExternal, http.StatusBadGateway, "Envío de mensaje falló")
+	CodeInvalidRecipient     = ErrRegistry.Register("INVALID_RECIPIENT", errx.TypeValidation, http.StatusBadRequest, "Destinatario inválido")
+	CodeInvalidMessageFormat = ErrRegistry.Register("INVALID_MESSAGE_FORMAT", errx.TypeValidation, http.StatusBadRequest, "Formato de mensaje inválido")
+	CodeAttachmentTooLarge   = ErrRegistry.Register("ATTACHMENT_TOO_LARGE", errx.TypeValidation, http.StatusRequestEntityTooLarge, "Archivo adjunto muy grande")
+	CodeUnsupportedMediaType = ErrRegistry.Register("UNSUPPORTED_MEDIA_TYPE", errx.TypeValidation, http.StatusUnsupportedMediaType, "Tipo de medio no soportado")
+
+	// Provider errors
+	CodeProviderNotConfigured = ErrRegistry.Register("PROVIDER_NOT_CONFIGURED", errx.TypeValidation, http.StatusBadRequest, "Proveedor no configurado")
+	CodeProviderAuthFailed    = ErrRegistry.Register("PROVIDER_AUTH_FAILED", errx.TypeExternal, http.StatusUnauthorized, "Autenticación con proveedor falló")
+	CodeProviderAPIError      = ErrRegistry.Register("PROVIDER_API_ERROR", errx.TypeExternal, http.StatusBadGateway, "Error en API del proveedor")
+	CodeProviderRateLimited   = ErrRegistry.Register("PROVIDER_RATE_LIMITED", errx.TypeExternal, http.StatusTooManyRequests, "Proveedor limitó la tasa de requests")
+
+	// Webhook errors
+	CodeInvalidWebhookSignature = ErrRegistry.Register("INVALID_WEBHOOK_SIGNATURE", errx.TypeValidation, http.StatusUnauthorized, "Firma de webhook inválida")
+	CodeWebhookProcessingFailed = ErrRegistry.Register("WEBHOOK_PROCESSING_FAILED", errx.TypeInternal, http.StatusInternalServerError, "Procesamiento de webhook falló")
+
+	// Feature errors
+	CodeFeatureNotSupported = ErrRegistry.Register("FEATURE_NOT_SUPPORTED", errx.TypeBusiness, http.StatusNotImplemented, "Característica no soportada por el canal")
+)
+
+// ============================================================================
+// Error Constructor Functions
+// ============================================================================
+
+// Channel errors
+func ErrChannelNotFound() *errx.Error {
+	return ErrRegistry.New(CodeChannelNotFound)
+}
+
+func ErrChannelAlreadyExists() *errx.Error {
+	return ErrRegistry.New(CodeChannelAlreadyExists)
+}
+
+func ErrInvalidChannelType() *errx.Error {
+	return ErrRegistry.New(CodeInvalidChannelType)
+}
+
+func ErrInvalidChannelConfig() *errx.Error {
+	return ErrRegistry.New(CodeInvalidChannelConfig)
+}
+
+func ErrChannelInactive() *errx.Error {
+	return ErrRegistry.New(CodeChannelInactive)
+}
+
+func ErrChannelNotSupported() *errx.Error {
+	return ErrRegistry.New(CodeChannelNotSupported)
+}
+
+// Message sending errors
+func ErrMessageSendFailed() *errx.Error {
+	return ErrRegistry.New(CodeMessageSendFailed)
+}
+
+func ErrInvalidRecipient() *errx.Error {
+	return ErrRegistry.New(CodeInvalidRecipient)
+}
+
+func ErrInvalidMessageFormat() *errx.Error {
+	return ErrRegistry.New(CodeInvalidMessageFormat)
+}
+
+func ErrAttachmentTooLarge() *errx.Error {
+	return ErrRegistry.New(CodeAttachmentTooLarge)
+}
+
+func ErrUnsupportedMediaType() *errx.Error {
+	return ErrRegistry.New(CodeUnsupportedMediaType)
+}
+
+// Provider errors
+func ErrProviderNotConfigured() *errx.Error {
+	return ErrRegistry.New(CodeProviderNotConfigured)
+}
+
+func ErrProviderAuthFailed() *errx.Error {
+	return ErrRegistry.New(CodeProviderAuthFailed)
+}
+
+func ErrProviderAPIError() *errx.Error {
+	return ErrRegistry.New(CodeProviderAPIError)
+}
+
+func ErrProviderRateLimited() *errx.Error {
+	return ErrRegistry.New(CodeProviderRateLimited)
+}
+
+// Webhook errors
+func ErrInvalidWebhookSignature() *errx.Error {
+	return ErrRegistry.New(CodeInvalidWebhookSignature)
+}
+
+func ErrWebhookProcessingFailed() *errx.Error {
+	return ErrRegistry.New(CodeWebhookProcessingFailed)
+}
+
+// Feature errors
+func ErrFeatureNotSupported() *errx.Error {
+	return ErrRegistry.New(CodeFeatureNotSupported)
+}
+
 package engine
 
 import (

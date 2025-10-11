@@ -46,16 +46,6 @@ type RedisConfig struct {
 	DB       int
 }
 
-// SIREConfig configuración de SIRE
-type SIREConfig struct {
-	BaseURL      string
-	SecurityURL  string
-	ClientID     string
-	ClientSecret string
-	Username     string
-	Password     string
-}
-
 // Load carga la configuración desde variables de entorno
 func Load() (*Config, error) {
 	// Cargar .env si existe

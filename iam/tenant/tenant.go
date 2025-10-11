@@ -44,12 +44,6 @@ type Tenant struct {
 	TrialExpiresAt        *time.Time       `db:"trial_expires_at" json:"trial_expires_at,omitempty"`
 	SubscriptionExpiresAt *time.Time       `db:"subscription_expires_at" json:"subscription_expires_at,omitempty"`
 
-	// SIRE API Credentials
-	SireClientID     *string `db:"sire_client_id" json:"-"` // No exponer en JSON por seguridad
-	SireClientSecret *string `db:"sire_client_secret" json:"-"`
-	SireUsername     *string `db:"sire_username" json:"-"`
-	SirePassword     *string `db:"sire_password" json:"-"`
-
 	CreatedAt time.Time `db:"created_at" json:"created_at"`
 	UpdatedAt time.Time `db:"updated_at" json:"updated_at"`
 }
@@ -153,69 +147,31 @@ func (t *Tenant) getMaxUsersForPlan(plan SubscriptionPlan) int {
 	}
 }
 
-// HasSireCredentials verifica si el tenant tiene credenciales SIRE configuradas
-func (t *Tenant) HasSireCredentials() bool {
-	return t.SireClientID != nil && *t.SireClientID != "" &&
-		t.SireClientSecret != nil && *t.SireClientSecret != "" &&
-		t.SireUsername != nil && *t.SireUsername != "" &&
-		t.SirePassword != nil && *t.SirePassword != ""
-}
-
-// SetSireCredentials establece las credenciales SIRE
-func (t *Tenant) SetSireCredentials(clientID, clientSecret, username, password string) {
-	t.SireClientID = &clientID
-	t.SireClientSecret = &clientSecret
-	t.SireUsername = &username
-	t.SirePassword = &password
-	t.UpdatedAt = time.Now()
-}
-
-// ClearSireCredentials limpia las credenciales SIRE
-func (t *Tenant) ClearSireCredentials() {
-	t.SireClientID = nil
-	t.SireClientSecret = nil
-	t.SireUsername = nil
-	t.SirePassword = nil
-	t.UpdatedAt = time.Now()
-}
-
-// GetSireCredentials retorna las credenciales SIRE (usar con cuidado)
-func (t *Tenant) GetSireCredentials() (clientID, clientSecret, username, password string, ok bool) {
-	if !t.HasSireCredentials() {
-		return "", "", "", "", false
-	}
-	return *t.SireClientID, *t.SireClientSecret, *t.SireUsername, *t.SirePassword, true
-}
-
 // ============================================================================
 // DTOs
 // ============================================================================
 
 // TenantDetailsDTO contiene información básica de un tenant para otros módulos
 type TenantDetailsDTO struct {
-	ID                   kernel.TenantID  `json:"id"`
-	CompanyName          string           `json:"company_name"`
-	RUC                  string           `json:"ruc"`
-	Status               TenantStatus     `json:"status"`
-	SubscriptionPlan     SubscriptionPlan `json:"subscription_plan"`
-	MaxUsers             int              `json:"max_users"`
-	CurrentUsers         int              `json:"current_users"`
-	HasSireCredentials   bool             `json:"has_sire_credentials"`
-	SireCredentialsValid bool             `json:"sire_credentials_valid,omitempty"`
+	ID               kernel.TenantID  `json:"id"`
+	CompanyName      string           `json:"company_name"`
+	RUC              string           `json:"ruc"`
+	Status           TenantStatus     `json:"status"`
+	SubscriptionPlan SubscriptionPlan `json:"subscription_plan"`
+	MaxUsers         int              `json:"max_users"`
+	CurrentUsers     int              `json:"current_users"`
 }
 
 // ToDTO convierte la entidad Tenant a TenantDetailsDTO
 func (t *Tenant) ToDTO() TenantDetailsDTO {
 	return TenantDetailsDTO{
-		ID:                   t.ID,
-		CompanyName:          t.CompanyName,
-		RUC:                  t.RUC,
-		Status:               t.Status,
-		SubscriptionPlan:     t.SubscriptionPlan,
-		MaxUsers:             t.MaxUsers,
-		CurrentUsers:         t.CurrentUsers,
-		HasSireCredentials:   t.HasSireCredentials(),
-		SireCredentialsValid: t.HasSireCredentials(), // Puedes agregar validación adicional aquí
+		ID:               t.ID,
+		CompanyName:      t.CompanyName,
+		RUC:              t.RUC,
+		Status:           t.Status,
+		SubscriptionPlan: t.SubscriptionPlan,
+		MaxUsers:         t.MaxUsers,
+		CurrentUsers:     t.CurrentUsers,
 	}
 }
 
@@ -234,38 +190,6 @@ type CreateTenantRequest struct {
 type UpdateTenantRequest struct {
 	CompanyName *string       `json:"company_name,omitempty" validate:"omitempty,min=2"`
 	Status      *TenantStatus `json:"status,omitempty"`
-}
-
-// SetSireCredentialsRequest para configurar credenciales SIRE
-type SetSireCredentialsRequest struct {
-	ClientID     string `json:"client_id" validate:"required,min=10"`
-	ClientSecret string `json:"client_secret" validate:"required,min=10"`
-	Username     string `json:"username" validate:"required,min=5"`
-	Password     string `json:"password" validate:"required,min=6"`
-}
-
-// SireCredentialsResponse respuesta con información de credenciales SIRE (sin datos sensibles)
-type SireCredentialsResponse struct {
-	HasCredentials bool   `json:"has_credentials"`
-	ClientID       string `json:"client_id,omitempty"` // Solo mostrar si existe
-	Username       string `json:"username,omitempty"`  // Solo mostrar si existe
-	ConfiguredAt   string `json:"configured_at,omitempty"`
-}
-
-// ToSireCredentialsResponse convierte el tenant a respuesta de credenciales
-func (t *Tenant) ToSireCredentialsResponse() SireCredentialsResponse {
-	resp := SireCredentialsResponse{
-		HasCredentials: t.HasSireCredentials(),
-	}
-
-	if t.HasSireCredentials() {
-		// Solo mostrar información no sensible
-		resp.ClientID = *t.SireClientID
-		resp.Username = *t.SireUsername
-		resp.ConfiguredAt = t.UpdatedAt.Format(time.RFC3339)
-	}
-
-	return resp
 }
 
 // TenantResponse representa la respuesta completa de un tenant con configuración
@@ -350,7 +274,6 @@ type TenantStatsResponse struct {
 	DaysUntilExpiration   *int            `json:"days_until_expiration,omitempty"`
 	IsTrialExpired        bool            `json:"is_trial_expired"`
 	IsSubscriptionExpired bool            `json:"is_subscription_expired"`
-	HasSireIntegration    bool            `json:"has_sire_integration"`
 }
 
 // TenantHealthResponse para el estado de salud del tenant
@@ -400,17 +323,15 @@ var ErrRegistry = errx.NewRegistry("TENANT")
 
 // Códigos de error
 var (
-	CodeTenantNotFound         = ErrRegistry.Register("NOT_FOUND", errx.TypeNotFound, http.StatusNotFound, "Empresa no encontrada")
-	CodeTenantAlreadyExists    = ErrRegistry.Register("ALREADY_EXISTS", errx.TypeConflict, http.StatusConflict, "La empresa ya existe")
-	CodeTenantSuspended        = ErrRegistry.Register("SUSPENDED", errx.TypeBusiness, http.StatusForbidden, "Empresa suspendida")
-	CodeTrialExpired           = ErrRegistry.Register("TRIAL_EXPIRED", errx.TypeBusiness, http.StatusPaymentRequired, "Período de prueba expirado")
-	CodeSubscriptionExpired    = ErrRegistry.Register("SUBSCRIPTION_EXPIRED", errx.TypeBusiness, http.StatusPaymentRequired, "Suscripción expirada")
-	CodeMaxUsersReached        = ErrRegistry.Register("MAX_USERS_REACHED", errx.TypeBusiness, http.StatusForbidden, "Máximo de usuarios alcanzado")
-	CodeTooManyUsersForPlan    = ErrRegistry.Register("TOO_MANY_USERS_FOR_PLAN", errx.TypeBusiness, http.StatusBadRequest, "El nuevo plan no permite tantos usuarios")
-	CodeTenantHasUsers         = ErrRegistry.Register("TENANT_HAS_USERS", errx.TypeBusiness, http.StatusConflict, "No se puede eliminar tenant con usuarios activos")
-	CodeInvalidPlanUpgrade     = ErrRegistry.Register("INVALID_PLAN_UPGRADE", errx.TypeBusiness, http.StatusBadRequest, "Actualización de plan inválida")
-	CodeSireCredentialsInvalid = ErrRegistry.Register("SIRE_CREDENTIALS_INVALID", errx.TypeValidation, http.StatusBadRequest, "Credenciales SIRE inválidas")
-	CodeSireCredentialsNotSet  = ErrRegistry.Register("SIRE_CREDENTIALS_NOT_SET", errx.TypeBusiness, http.StatusPreconditionRequired, "Credenciales SIRE no configuradas")
+	CodeTenantNotFound      = ErrRegistry.Register("NOT_FOUND", errx.TypeNotFound, http.StatusNotFound, "Empresa no encontrada")
+	CodeTenantAlreadyExists = ErrRegistry.Register("ALREADY_EXISTS", errx.TypeConflict, http.StatusConflict, "La empresa ya existe")
+	CodeTenantSuspended     = ErrRegistry.Register("SUSPENDED", errx.TypeBusiness, http.StatusForbidden, "Empresa suspendida")
+	CodeTrialExpired        = ErrRegistry.Register("TRIAL_EXPIRED", errx.TypeBusiness, http.StatusPaymentRequired, "Período de prueba expirado")
+	CodeSubscriptionExpired = ErrRegistry.Register("SUBSCRIPTION_EXPIRED", errx.TypeBusiness, http.StatusPaymentRequired, "Suscripción expirada")
+	CodeMaxUsersReached     = ErrRegistry.Register("MAX_USERS_REACHED", errx.TypeBusiness, http.StatusForbidden, "Máximo de usuarios alcanzado")
+	CodeTooManyUsersForPlan = ErrRegistry.Register("TOO_MANY_USERS_FOR_PLAN", errx.TypeBusiness, http.StatusBadRequest, "El nuevo plan no permite tantos usuarios")
+	CodeTenantHasUsers      = ErrRegistry.Register("TENANT_HAS_USERS", errx.TypeBusiness, http.StatusConflict, "No se puede eliminar tenant con usuarios activos")
+	CodeInvalidPlanUpgrade  = ErrRegistry.Register("INVALID_PLAN_UPGRADE", errx.TypeBusiness, http.StatusBadRequest, "Actualización de plan inválida")
 )
 
 // Helper functions para crear errores
@@ -449,12 +370,3 @@ func ErrTenantHasUsers() *errx.Error {
 func ErrInvalidPlanUpgrade() *errx.Error {
 	return ErrRegistry.New(CodeInvalidPlanUpgrade)
 }
-
-func ErrSireCredentialsInvalid() *errx.Error {
-	return ErrRegistry.New(CodeSireCredentialsInvalid)
-}
-
-func ErrSireCredentialsNotSet() *errx.Error {
-	return ErrRegistry.New(CodeSireCredentialsNotSet)
-}
-
