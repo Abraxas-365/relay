@@ -1,0 +1,29 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: facturamelo_postgres
+    environment:
+      POSTGRES_USER: appuser
+      POSTGRES_PASSWORD: supersecret
+      POSTGRES_DB: appdb
+    ports:
+      - "5443:5432" # Changed from 5432:5432 to 5433:5432
+    volumes:
+      - facturamelo_postgres_data:/var/lib/postgresql/data
+    networks:
+      - facturamelo_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: facturamelo_redis
+    ports:
+      - "6380:6379" # Also changed Redis port to avoid conflicts
+    networks:
+      - facturamelo_network
+
+volumes:
+  facturamelo_postgres_data:
+
+networks:
+  facturamelo_network:
+    driver: bridge
