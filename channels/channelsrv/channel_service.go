@@ -2,9 +2,12 @@ package channelsrv
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"time"
 
 	"github.com/Abraxas-365/craftable/errx"
+	"github.com/Abraxas-365/craftable/logx"
 	"github.com/Abraxas-365/relay/channels"
 	"github.com/Abraxas-365/relay/iam/tenant"
 	"github.com/Abraxas-365/relay/pkg/kernel"
@@ -55,13 +58,13 @@ func (s *ChannelService) CreateChannel(ctx context.Context, req channels.CreateC
 	if exists {
 		return nil, channels.ErrChannelAlreadyExists().WithDetail("name", req.Name)
 	}
-
+	channelID := kernel.NewChannelID(uuid.NewString())
 	// Generar webhook URL
-	webhookURL := s.generateWebhookURL(req.TenantID, req.Type)
+	webhookURL := s.generateWebhookURL(req.TenantID, channelID, req.Type)
 
 	// Crear canal usando el helper
 	newChannel, err := channels.NewChannelFromConfig(
-		kernel.NewChannelID(uuid.NewString()),
+		channelID,
 		req.TenantID,
 		req.Name,
 		req.Description,
@@ -87,8 +90,7 @@ func (s *ChannelService) CreateChannel(ctx context.Context, req channels.CreateC
 
 	// Registrar en el channel manager
 	if err := s.channelManager.RegisterChannel(ctx, *newChannel); err != nil {
-		// Log error but don't fail
-		// logger.Error("Failed to register channel in manager", err)
+		logx.Warn("failed to register channel in manager: %v", err)
 	}
 
 	return newChannel, nil
@@ -359,9 +361,27 @@ func (s *ChannelService) BulkDeactivateChannels(ctx context.Context, channelIDs 
 // Helper Methods
 // ============================================================================
 
+func (s *ChannelService) getBaseURL() string {
+	// Get from environment variable or config
+	baseURL := os.Getenv("APP_BASE_URL")
+	if baseURL == "" {
+		baseURL = "https://api.yourdomain.com" // fallback
+	}
+	return baseURL
+}
+
 // generateWebhookURL genera una URL de webhook para el canal
-func (s *ChannelService) generateWebhookURL(tenantID kernel.TenantID, channelType channels.ChannelType) string {
-	// En producción, esto debería usar la configuración real del servidor
-	baseURL := "https://api.yourdomain.com" // O desde config
-	return baseURL + "/webhooks/channels/" + string(channelType) + "/" + tenantID.String()
+func (s *ChannelService) generateWebhookURL(tenantID kernel.TenantID, channelID kernel.ChannelID, channelType channels.ChannelType) string {
+	baseURL := s.getBaseURL()
+
+	switch channelType {
+	case channels.ChannelTypeWhatsApp:
+		return fmt.Sprintf("%s/webhooks/whatsapp/%s/%s", baseURL, tenantID, channelID)
+	case channels.ChannelTypeInstagram:
+		return fmt.Sprintf("%s/webhooks/instagram/%s/%s", baseURL, tenantID, channelID)
+	case channels.ChannelTypeTelegram:
+		return fmt.Sprintf("%s/webhooks/telegram/%s/%s", baseURL, tenantID, channelID)
+	default:
+		return fmt.Sprintf("%s/webhooks/%s/%s/%s", baseURL, channelType, tenantID, channelID)
+	}
 }

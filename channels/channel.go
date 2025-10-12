@@ -90,6 +90,11 @@ type WhatsAppConfig struct {
 	AppSecret          string `json:"app_secret,omitempty"`
 	WebhookVerifyToken string `json:"webhook_verify_token"`
 	APIVersion         string `json:"api_version,omitempty"` // v17.0, v18.0
+
+	// Buffer configuration
+	BufferEnabled        bool `json:"buffer_enabled,omitempty"`          // Enable message buffering
+	BufferTimeSeconds    int  `json:"buffer_time_seconds,omitempty"`     // Time window to buffer messages (e.g., 5 seconds)
+	BufferResetOnMessage bool `json:"buffer_reset_on_message,omitempty"` // Reset timer on each new message
 }
 
 func (c WhatsAppConfig) Validate() error {
@@ -102,6 +107,17 @@ func (c WhatsAppConfig) Validate() error {
 	if c.AccessToken == "" {
 		return ErrInvalidChannelConfig().WithDetail("reason", "access_token is required")
 	}
+
+	// Validate buffer config
+	if c.BufferEnabled {
+		if c.BufferTimeSeconds <= 0 {
+			c.BufferTimeSeconds = 5 // Default 5 seconds
+		}
+		if c.BufferTimeSeconds > 60 {
+			return ErrInvalidChannelConfig().WithDetail("reason", "buffer_time_seconds cannot exceed 60 seconds")
+		}
+	}
+
 	return nil
 }
 

@@ -11,7 +11,8 @@ import (
 	"github.com/Abraxas-365/craftable/eventx/providers/eventxmemory"
 
 	"github.com/Abraxas-365/relay/channels"
-	"github.com/Abraxas-365/relay/channels/channeladapters"
+	whatsapp "github.com/Abraxas-365/relay/channels/channeladapters/whatssapp"
+	"github.com/Abraxas-365/relay/channels/channelapi"
 	"github.com/Abraxas-365/relay/channels/channelmanager"
 	"github.com/Abraxas-365/relay/channels/channelsinfra"
 	"github.com/Abraxas-365/relay/channels/channelsrv"
@@ -40,12 +41,9 @@ import (
 	"github.com/Abraxas-365/relay/parser/parserengines"
 	"github.com/Abraxas-365/relay/parser/parserinfra"
 
-	// "github.com/Abraxas-365/relay/parser/parserinfra" // TODO: Uncomment when repo is ready
-
 	"github.com/Abraxas-365/relay/tool"
 
 	"github.com/Abraxas-365/relay/pkg/config"
-	"github.com/Abraxas-365/relay/testapi"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/jmoiron/sqlx"
@@ -102,6 +100,14 @@ type Container struct {
 	ChannelManager channels.ChannelManager
 	ChannelService *channelsrv.ChannelService
 
+	// Channel Adapters
+	WhatsAppAdapter *whatsapp.WhatsAppAdapter
+
+	// Channel API Handlers
+	ChannelHandler         *channelapi.ChannelHandler
+	WhatsAppWebhookHandler *whatsapp.WebhookHandler
+	WhatsAppWebhookRoutes  *whatsapp.WebhookRoutes
+
 	// =================================================================
 	// ENGINE
 	// =================================================================
@@ -141,12 +147,6 @@ type Container struct {
 	// AI/LLM 🤖
 	// =================================================================
 	LLMClient *llm.Client
-
-	// =================================================================
-	// TEST API 🧪
-	// =================================================================
-	TestHandler *testapi.TestHandler
-	TestRoutes  *testapi.TestRoutes
 }
 
 // NewContainer crea un nuevo contenedor de dependencias
@@ -164,12 +164,11 @@ func NewContainer(cfg *config.Config, db *sqlx.DB, redisClient *redis.Client) *C
 	c.initIAMRepositories()
 	c.initIAMServices()
 	c.initAuthServices()
-	c.initLLMComponents()    // LLM first (needed by AI parser)
-	c.initParserComponents() // Parser before engine
-	c.initToolComponents()   // Tools before engine
-	c.initChannelComponents()
-	c.initEngineComponents() // Engine uses parser manager
-	c.initTestAPI()
+	c.initLLMComponents()     // LLM first (needed by AI parser)
+	c.initParserComponents()  // Parser before engine
+	c.initToolComponents()    // Tools before engine
+	c.initChannelComponents() // ✅ Channels BEFORE engine
+	c.initEngineComponents()  // ✅ Engine AFTER channels (can use ChannelManager)
 
 	log.Println("✅ Dependency container initialized successfully")
 
@@ -181,7 +180,7 @@ func NewContainer(cfg *config.Config, db *sqlx.DB, redisClient *redis.Client) *C
 // =================================================================
 
 func (c *Container) initEventBus() {
-	log.Println("  🚌 Initializing event bus...")
+	log.Println("  ⚡ Initializing event bus...")
 
 	busConfig := eventx.BusConfig{
 		ConnectionName:    "relay-event-bus",
@@ -312,28 +311,26 @@ func (c *Container) initParserComponents() {
 	log.Println("  🔍 Initializing parser components...")
 
 	c.ParserRepo = parserinfra.NewPostgresParserRepository(c.DB)
-	// For now, use a nil repo or mock
-	log.Println("    ⚠️  ParserRepo not initialized (pending implementation)")
+	log.Println("    ✅ ParserRepo initialized")
 
 	// Initialize parser engines
 	c.RegexParserEngine = parserengines.NewRegexParserEngine()
-	log.Println("    ✓ Regex parser engine initialized")
+	log.Println("    ✅ Regex parser engine initialized")
 
 	// if c.LLMClient != nil {
 	// 	c.AIParserEngine = parserengines.NewAIParserEngine(c.LLMClient)
-	// 	log.Println("    ✓ AI parser engine initialized")
+	// 	log.Println("    ✅ AI parser engine initialized")
 	// } else {
 	// 	log.Println("    ⚠️  AI parser engine skipped (LLM not available)")
 	// }
-
-	// c.RuleParserEngine = parserengines.NewRuleParserEngine()
-	// log.Println("    ✓ Rule parser engine initialized")
-
-	// c.KeywordParserEngine = parserengines.NewKeywordParserEngine()
-	// log.Println("    ✓ Keyword parser engine initialized")
 	//
+	// c.RuleParserEngine = parserengines.NewRuleParserEngine()
+	// log.Println("    ✅ Rule parser engine initialized")
+	//
+	// c.KeywordParserEngine = parserengines.NewKeywordParserEngine()
+	// log.Println("    ✅ Keyword parser engine initialized")
+
 	// NLP parser requires additional dependencies
-	// c.NLPParserEngine = parserengines.NewNLPParserEngine(...)
 	log.Println("    ⚠️  NLP parser engine not initialized (pending implementation)")
 
 	// Initialize ParserManager
@@ -341,22 +338,26 @@ func (c *Container) initParserComponents() {
 
 	// Register all parser engines
 	c.ParserManager.RegisterEngine(parser.ParserTypeRegex, c.RegexParserEngine)
-	log.Println("    ✓ Registered Regex parser engine")
+	log.Println("    ✅ Registered Regex parser engine")
 
 	if c.AIParserEngine != nil {
 		c.ParserManager.RegisterEngine(parser.ParserTypeAI, c.AIParserEngine)
-		log.Println("    ✓ Registered AI parser engine")
+		log.Println("    ✅ Registered AI parser engine")
 	}
 
-	c.ParserManager.RegisterEngine(parser.ParserTypeRule, c.RuleParserEngine)
-	log.Println("    ✓ Registered Rule parser engine")
+	if c.RuleParserEngine != nil {
+		c.ParserManager.RegisterEngine(parser.ParserTypeRule, c.RuleParserEngine)
+		log.Println("    ✅ Registered Rule parser engine")
+	}
 
-	c.ParserManager.RegisterEngine(parser.ParserTypeKeyword, c.KeywordParserEngine)
-	log.Println("    ✓ Registered Keyword parser engine")
+	if c.KeywordParserEngine != nil {
+		c.ParserManager.RegisterEngine(parser.ParserTypeKeyword, c.KeywordParserEngine)
+		log.Println("    ✅ Registered Keyword parser engine")
+	}
 
 	if c.NLPParserEngine != nil {
 		c.ParserManager.RegisterEngine(parser.ParserTypeNLP, c.NLPParserEngine)
-		log.Println("    ✓ Registered NLP parser engine")
+		log.Println("    ✅ Registered NLP parser engine")
 	}
 
 	log.Println("  ✅ Parser components initialized")
@@ -377,36 +378,45 @@ func (c *Container) initToolComponents() {
 }
 
 // =================================================================
-// CHANNELS INITIALIZATION
+// CHANNELS INITIALIZATION 📡 (BEFORE ENGINE)
 // =================================================================
 
 func (c *Container) initChannelComponents() {
 	log.Println("  📡 Initializing channel components...")
 
+	// Initialize channel repository
 	c.ChannelRepo = channelsinfra.NewPostgresChannelRepository(c.DB)
+	log.Println("    ✅ Channel repository initialized")
 
-	// Initialize the real channel manager
+	// Initialize the channel manager FIRST
 	c.ChannelManager = channelmanager.NewDefaultChannelManager(c.ChannelRepo)
+	log.Println("    ✅ Channel manager initialized")
 
-	// Register adapters
-	testAdapter := channeladapters.NewTestHTTPAdapter()
-	c.ChannelManager.RegisterAdapter(testAdapter)
+	// Initialize WhatsApp adapter (base instance)
+	c.WhatsAppAdapter = whatsapp.NewWhatsAppAdapter(
+		channels.WhatsAppConfig{}, // Empty config, overridden per channel
+		c.RedisClient,
+	)
+	c.ChannelManager.RegisterAdapter(c.WhatsAppAdapter)
+	log.Println("    ✅ WhatsApp adapter registered")
 
 	// TODO: Register other adapters as needed
-	// whatsappAdapter := whatsappadapter.NewWhatsAppAdapter()
-	// c.ChannelManager.RegisterAdapter(whatsappAdapter)
+	// telegramAdapter := telegram.NewTelegramAdapter(...)
+	// c.ChannelManager.RegisterAdapter(telegramAdapter)
 
+	// Initialize channel service
 	c.ChannelService = channelsrv.NewChannelService(
 		c.ChannelRepo,
 		c.TenantRepo,
 		c.ChannelManager,
 	)
+	log.Println("    ✅ Channel service initialized")
 
 	log.Println("  ✅ Channel components initialized")
 }
 
 // =================================================================
-// ENGINE INITIALIZATION ⚙️
+// ENGINE INITIALIZATION ⚙️ (AFTER CHANNELS)
 // =================================================================
 
 func (c *Container) initEngineComponents() {
@@ -423,14 +433,14 @@ func (c *Container) initEngineComponents() {
 		MaxHistorySize:        100,
 	}
 	c.SessionManager = sessmanager.NewSessionManager(c.EngineSessionRepo, sessionConfig)
-	log.Println("    ✓ Session manager initialized")
+	log.Println("    ✅ Session manager initialized")
 
 	// Initialize step executors
 	c.ActionExecutor = stepexec.NewActionExecutor()
 	c.ConditionExecutor = stepexec.NewConditionExecutor()
 	c.ResponseExecutor = stepexec.NewResponseExecutor()
 	c.DelayExecutor = stepexec.NewDelayExecutor()
-	log.Println("    ✓ Step executors initialized")
+	log.Println("    ✅ Step executors initialized")
 
 	// Initialize workflow executor with ParserManager and all step executors
 	c.WorkflowExecutor = workflowexec.NewDefaultWorkflowExecutor(
@@ -440,32 +450,37 @@ func (c *Container) initEngineComponents() {
 		c.ResponseExecutor,
 		c.DelayExecutor,
 	)
-	log.Println("    ✓ Workflow executor initialized with parser manager")
+	log.Println("    ✅ Workflow executor initialized with parser manager")
 
-	// Initialize message processor
+	// ✅ Initialize message processor WITH ChannelManager (no injection needed!)
 	c.MessageProcessor = msgprocessor.NewMessageProcessor(
 		c.MessageRepo,
 		c.WorkflowRepo,
 		c.SessionManager,
 		c.WorkflowExecutor,
-		c.ChannelManager,
+		c.ChannelManager, // ✅ ChannelManager already exists!
 	)
-	log.Println("    ✓ Message processor initialized")
+	log.Println("    ✅ Message processor initialized with ChannelManager")
+
+	// Initialize channel API handler (needs MessageProcessor)
+	c.ChannelHandler = channelapi.NewChannelHandler(c.MessageProcessor)
+	log.Println("    ✅ Channel API handler initialized")
+
+	// Initialize WhatsApp webhook handler
+	c.WhatsAppWebhookHandler = whatsapp.NewWebhookHandler(
+		c.ChannelRepo,
+		c.WhatsAppAdapter,
+	)
+	log.Println("    ✅ WhatsApp webhook handler initialized")
+
+	// Initialize WhatsApp webhook routes (will be setup in main.go)
+	c.WhatsAppWebhookRoutes = whatsapp.NewWebhookRoutes(
+		c.WhatsAppWebhookHandler,
+		c.ChannelHandler.ProcessIncomingMessage,
+	)
+	log.Println("    ✅ WhatsApp webhook routes initialized")
 
 	log.Println("  ✅ Engine components initialized")
-}
-
-// =================================================================
-// TEST API INITIALIZATION 🧪
-// =================================================================
-
-func (c *Container) initTestAPI() {
-	log.Println("  🧪 Initializing test API...")
-
-	c.TestHandler = testapi.NewTestHandler(c.MessageProcessor)
-	c.TestRoutes = testapi.NewTestRoutes(c.TestHandler)
-
-	log.Println("  ✅ Test API initialized")
 }
 
 // =================================================================
@@ -475,7 +490,8 @@ func (c *Container) initTestAPI() {
 func (c *Container) GetAllRoutes() []RouteGroup {
 	routes := []RouteGroup{
 		{Name: "auth", Handler: c.AuthHandlers},
-		{Name: "test", Handler: c.TestRoutes},
+		{Name: "whatsapp_webhook", Handler: c.WhatsAppWebhookHandler},
+		{Name: "channel_api", Handler: c.ChannelHandler},
 	}
 	return routes
 }
@@ -489,7 +505,7 @@ func (c *Container) Cleanup() {
 	log.Println("🧹 Cleaning up container resources...")
 
 	if c.EventBus != nil {
-		log.Println("  🚌 Disconnecting event bus...")
+		log.Println("  ⚡ Disconnecting event bus...")
 		ctx := context.Background()
 		if err := c.EventBus.Disconnect(ctx); err != nil {
 			log.Printf("  ⚠️  Failed to disconnect event bus: %v", err)
@@ -534,6 +550,9 @@ func (c *Container) HealthCheck() map[string]bool {
 
 	health["parser_manager"] = c.ParserManager != nil
 	health["workflow_executor"] = c.WorkflowExecutor != nil
+	health["message_processor"] = c.MessageProcessor != nil
+	health["channel_manager"] = c.ChannelManager != nil
+	health["whatsapp_adapter"] = c.WhatsAppAdapter != nil
 
 	return health
 }
@@ -602,3 +621,11 @@ func (c *Container) GetParserEngineNames() []string {
 	return engines
 }
 
+func (c *Container) GetChannelAdapterNames() []string {
+	adapters := []string{}
+	if c.WhatsAppAdapter != nil {
+		adapters = append(adapters, "WhatsAppAdapter")
+	}
+	// TODO: Add other adapters
+	return adapters
+}

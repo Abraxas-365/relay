@@ -21,7 +21,7 @@ type OutgoingMessage struct {
 
 // IncomingMessage mensaje entrante recibido del canal
 type IncomingMessage struct {
-	MessageID  string           `json:"message_id"`
+	MessageID  kernel.MessageID `json:"message_id"`
 	ChannelID  kernel.ChannelID `json:"channel_id"`
 	SenderID   string           `json:"sender_id"`
 	Content    MessageContent   `json:"content"`
