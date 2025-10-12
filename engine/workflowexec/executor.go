@@ -7,30 +7,31 @@ import (
 	"time"
 
 	"github.com/Abraxas-365/craftable/errx"
+	"github.com/Abraxas-365/relay/channels"
 	"github.com/Abraxas-365/relay/engine"
 	"github.com/Abraxas-365/relay/parser"
 	"github.com/Abraxas-365/relay/pkg/kernel"
 )
 
-// DefaultWorkflowExecutor implementa engine.WorkflowExecutor
 type DefaultWorkflowExecutor struct {
-	stepExecutors map[engine.StepType]engine.StepExecutor
-	parserManager *parser.ParserManager
+	stepExecutors  map[engine.StepType]engine.StepExecutor
+	parserManager  *parser.ParserManager
+	channelManager channels.ChannelManager // ✅ ADD THIS
 }
 
 var _ engine.WorkflowExecutor = (*DefaultWorkflowExecutor)(nil)
 
-// NewDefaultWorkflowExecutor crea una nueva instancia del ejecutor de workflows
 func NewDefaultWorkflowExecutor(
 	parserManager *parser.ParserManager,
+	channelManager channels.ChannelManager,
 	stepExecutors ...engine.StepExecutor,
 ) *DefaultWorkflowExecutor {
 	executor := &DefaultWorkflowExecutor{
-		stepExecutors: make(map[engine.StepType]engine.StepExecutor),
-		parserManager: parserManager,
+		stepExecutors:  make(map[engine.StepType]engine.StepExecutor),
+		parserManager:  parserManager,
+		channelManager: channelManager,
 	}
 
-	// Registrar todos los ejecutores proporcionados
 	for _, stepExec := range stepExecutors {
 		executor.RegisterStepExecutor(stepExec)
 	}
@@ -216,17 +217,11 @@ func (e *DefaultWorkflowExecutor) executeStepInternal(
 		err = e.executeConditionStep(ctx, step, message, session, stepResult, stepContext)
 	case engine.StepTypeTool:
 		err = e.executeToolStep(ctx, step, message, session, stepResult, workflowResult, stepContext)
-	case engine.StepTypeResponse:
-		err = e.executeResponseStep(ctx, step, message, session, stepResult, stepContext)
 	case engine.StepTypeDelay:
 		err = e.executeDelayStep(ctx, step, stepResult)
 
-	// REMOVE THIS CASE - Let registered executors handle ACTION steps
-	// case engine.StepTypeAction:
-	//     err = e.executeActionStep(ctx, step, message, session, stepResult, workflowResult, stepContext)
-
 	default:
-		// Try with registered executors (THIS WILL NOW HANDLE ACTION TYPE)
+		// Try with registered executors (THIS WILL NOW HANDLE RESPONSE TYPE)
 		if executor, ok := e.stepExecutors[step.Type]; ok {
 			input := e.prepareStepInput(message, session, stepContext)
 			stepResult, err = executor.Execute(ctx, step, input)

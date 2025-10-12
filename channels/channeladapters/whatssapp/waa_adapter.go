@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -56,8 +57,16 @@ func (a *WhatsAppAdapter) SendMessage(ctx context.Context, msg channels.Outgoing
 	// Build WhatsApp API payload
 	payload := a.buildMessagePayload(msg)
 
-	// Send to WhatsApp API
-	url := fmt.Sprintf("%s/messages", a.apiURL)
+	// Build URL with phone_number_id
+	url := fmt.Sprintf("https://graph.facebook.com/%s/%s/messages",
+		a.config.APIVersion,
+		a.config.PhoneNumberID,
+	)
+
+	// ✅ LOG THE ACTUAL URL BEING CALLED
+	log.Printf("🌐 WhatsApp API URL: %s", url)
+	log.Printf("📦 Payload: %+v", payload)
+	log.Printf("🔑 Token (first 20 chars): %s...", a.config.AccessToken[:20])
 
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
@@ -78,11 +87,14 @@ func (a *WhatsAppAdapter) SendMessage(ctx context.Context, msg channels.Outgoing
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		log.Printf("❌ WhatsApp API Error - Status: %d, Body: %s", resp.StatusCode, string(body))
 		return fmt.Errorf("whatsapp API error %d: %s", resp.StatusCode, string(body))
 	}
 
+	log.Printf("✅ WhatsApp message sent successfully - Response: %s", string(body))
 	return nil
 }
 
@@ -186,8 +198,8 @@ func (a *WhatsAppAdapter) TestConnection(ctx context.Context, config channels.Ch
 }
 
 // buildMessagePayload builds WhatsApp API payload
-func (a *WhatsAppAdapter) buildMessagePayload(msg channels.OutgoingMessage) map[string]interface{} {
-	payload := map[string]interface{}{
+func (a *WhatsAppAdapter) buildMessagePayload(msg channels.OutgoingMessage) map[string]any {
+	payload := map[string]any{
 		"messaging_product": "whatsapp",
 		"recipient_type":    "individual",
 		"to":                msg.RecipientID,
@@ -196,7 +208,7 @@ func (a *WhatsAppAdapter) buildMessagePayload(msg channels.OutgoingMessage) map[
 	// Handle different content types
 	if msg.Content.Type == "text" {
 		payload["type"] = "text"
-		payload["text"] = map[string]interface{}{
+		payload["text"] = map[string]any{
 			"body": msg.Content.Text,
 		}
 	} else if msg.Content.Type == "template" && msg.TemplateID != "" {
@@ -209,24 +221,24 @@ func (a *WhatsAppAdapter) buildMessagePayload(msg channels.OutgoingMessage) map[
 }
 
 // buildTemplatePayload builds template message payload
-func (a *WhatsAppAdapter) buildTemplatePayload(msg channels.OutgoingMessage) map[string]interface{} {
-	template := map[string]interface{}{
+func (a *WhatsAppAdapter) buildTemplatePayload(msg channels.OutgoingMessage) map[string]any {
+	template := map[string]any{
 		"name":     msg.TemplateID,
 		"language": map[string]string{"code": "en"},
 	}
 
 	if len(msg.Variables) > 0 {
-		components := []map[string]interface{}{}
-		parameters := []map[string]interface{}{}
+		components := []map[string]any{}
+		parameters := []map[string]any{}
 
 		for _, value := range msg.Variables {
-			parameters = append(parameters, map[string]interface{}{
+			parameters = append(parameters, map[string]any{
 				"type": "text",
 				"text": value,
 			})
 		}
 
-		components = append(components, map[string]interface{}{
+		components = append(components, map[string]any{
 			"type":       "body",
 			"parameters": parameters,
 		})

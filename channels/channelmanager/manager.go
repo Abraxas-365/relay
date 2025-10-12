@@ -2,48 +2,47 @@ package channelmanager
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sync"
 
 	"github.com/Abraxas-365/relay/channels"
+	whatsapp "github.com/Abraxas-365/relay/channels/channeladapters/whatssapp"
 	"github.com/Abraxas-365/relay/pkg/kernel"
+	"github.com/go-redis/redis/v8"
 )
 
 // DefaultChannelManager implementación del ChannelManager
 type DefaultChannelManager struct {
 	mu sync.RWMutex
 
-	// Adapters registrados por tipo de canal
-	adapters map[channels.ChannelType]channels.ChannelAdapter
+	// ✅ Adapters registrados por CHANNEL ID (no por tipo)
+	adapters map[kernel.ChannelID]channels.ChannelAdapter
 
 	// Canales registrados por ID
 	channels map[kernel.ChannelID]*channels.Channel
 
 	// Channel repository para persistencia
 	channelRepo channels.ChannelRepository
+
+	// ✅ Redis client para crear adapters de WhatsApp
+	redisClient *redis.Client
 }
 
 // NewDefaultChannelManager crea una nueva instancia
-func NewDefaultChannelManager(channelRepo channels.ChannelRepository) *DefaultChannelManager {
+func NewDefaultChannelManager(
+	channelRepo channels.ChannelRepository,
+	redisClient *redis.Client,
+) *DefaultChannelManager {
 	return &DefaultChannelManager{
-		adapters:    make(map[channels.ChannelType]channels.ChannelAdapter),
+		adapters:    make(map[kernel.ChannelID]channels.ChannelAdapter),
 		channels:    make(map[kernel.ChannelID]*channels.Channel),
 		channelRepo: channelRepo,
+		redisClient: redisClient,
 	}
 }
 
-// RegisterAdapter registra un adapter para un tipo de canal
-func (cm *DefaultChannelManager) RegisterAdapter(adapter channels.ChannelAdapter) {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-
-	channelType := adapter.GetType()
-	cm.adapters[channelType] = adapter
-
-	log.Printf("📝 Registered adapter for channel type: %s", channelType)
-}
-
-// RegisterChannel registra un canal en el manager
+// RegisterChannel registra un canal en el manager y crea su adapter
 func (cm *DefaultChannelManager) RegisterChannel(ctx context.Context, channel channels.Channel) error {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
@@ -53,39 +52,120 @@ func (cm *DefaultChannelManager) RegisterChannel(ctx context.Context, channel ch
 		return channels.ErrInvalidChannelConfig().WithDetail("reason", "channel is not valid")
 	}
 
-	// Verificar que exista adapter para este tipo
-	if _, exists := cm.adapters[channel.Type]; !exists {
-		log.Printf("⚠️  No adapter found for channel type: %s (channel: %s)", channel.Type, channel.ID.String())
-		// No fallar, solo advertir - permite registro sin adapter
+	// ✅ Crear adapter específico para este canal
+	adapter, err := cm.createAdapterForChannel(channel)
+	if err != nil {
+		log.Printf("❌ Failed to create adapter for channel %s: %v", channel.ID.String(), err)
+		return fmt.Errorf("failed to create adapter: %w", err)
 	}
 
-	// Registrar canal en memoria
+	// Registrar canal y adapter en memoria
 	cm.channels[channel.ID] = &channel
+	cm.adapters[channel.ID] = adapter
 
 	log.Printf("✅ Channel registered: %s (type: %s, id: %s)", channel.Name, channel.Type, channel.ID.String())
 
 	return nil
 }
 
-// GetAdapter obtiene el adapter para un tipo de canal
-func (cm *DefaultChannelManager) GetAdapter(channelType channels.ChannelType) (channels.ChannelAdapter, error) {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
+// ✅ createAdapterForChannel crea un adapter con la config específica del canal
+func (cm *DefaultChannelManager) createAdapterForChannel(channel channels.Channel) (channels.ChannelAdapter, error) {
+	switch channel.Type {
+	case channels.ChannelTypeWhatsApp:
+		// Obtener config tipada
+		config, err := channel.GetConfigStruct()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get config struct: %w", err)
+		}
 
-	adapter, exists := cm.adapters[channelType]
-	if !exists {
-		return nil, channels.ErrChannelNotSupported().WithDetail("type", string(channelType))
+		whatsappConfig, ok := config.(channels.WhatsAppConfig)
+		if !ok {
+			return nil, fmt.Errorf("invalid WhatsApp config type")
+		}
+
+		// Validar config
+		if err := whatsappConfig.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid WhatsApp config: %w", err)
+		}
+
+		// Log config details
+		log.Printf("🔧 Creating WhatsApp adapter for channel: %s", channel.ID)
+		log.Printf("   📱 Phone Number ID: %s", whatsappConfig.PhoneNumberID)
+		log.Printf("   🌐 API Version: %s", whatsappConfig.APIVersion)
+		log.Printf("   🏢 Business Account: %s", whatsappConfig.BusinessAccountID)
+		log.Printf("   🔑 Access Token: %s... (%d chars)",
+			safeSubstring(whatsappConfig.AccessToken, 20),
+			len(whatsappConfig.AccessToken))
+
+		// Crear adapter
+		adapter := whatsapp.NewWhatsAppAdapter(whatsappConfig, cm.redisClient)
+		if adapter == nil {
+			return nil, fmt.Errorf("failed to create WhatsApp adapter")
+		}
+
+		return adapter, nil
+
+	// ✅ Agregar más tipos de canales aquí
+	// case channels.ChannelTypeTelegram:
+	//     ...
+	// case channels.ChannelTypeSlack:
+	//     ...
+
+	default:
+		return nil, fmt.Errorf("unsupported channel type: %s", channel.Type)
 	}
-
-	return adapter, nil
 }
 
 // SendMessage envía un mensaje a través de un canal
-func (cm *DefaultChannelManager) SendMessage(ctx context.Context, channelID kernel.ChannelID, msg channels.OutgoingMessage) error {
+func (cm *DefaultChannelManager) SendMessage(
+	ctx context.Context,
+	tenantID kernel.TenantID,
+	channelID kernel.ChannelID,
+	msg channels.OutgoingMessage,
+) error {
 	// Obtener canal
-	channel, err := cm.getChannel(ctx, channelID)
-	if err != nil {
-		return err
+	cm.mu.RLock()
+	channel, channelExists := cm.channels[channelID]
+	adapter, adapterExists := cm.adapters[channelID]
+	cm.mu.RUnlock()
+
+	// Si el canal no está en cache, cargarlo desde DB
+	if !channelExists {
+		log.Printf("⚠️  Channel %s not in cache, loading from database...", channelID)
+
+		// Extraer tenantID del mensaje o del contexto
+		// Nota: Necesitarás pasar tenantID como parámetro o extraerlo del contexto
+		var err error
+		channel, err = cm.channelRepo.FindByID(ctx, channelID, tenantID) // ⚠️ Fix tenantID
+		if err != nil {
+			return channels.ErrChannelNotFound().
+				WithDetail("channel_id", channelID.String())
+		}
+
+		// Registrar el canal (esto creará el adapter)
+		if err := cm.RegisterChannel(ctx, *channel); err != nil {
+			return err
+		}
+
+		// Obtener el adapter recién creado
+		cm.mu.RLock()
+		adapter = cm.adapters[channelID]
+		cm.mu.RUnlock()
+	}
+
+	// Si no hay adapter, intentar crearlo
+	if !adapterExists {
+		log.Printf("⚠️  Adapter not found for channel %s, creating...", channelID)
+
+		newAdapter, err := cm.createAdapterForChannel(*channel)
+		if err != nil {
+			return err
+		}
+
+		cm.mu.Lock()
+		cm.adapters[channelID] = newAdapter
+		adapter = newAdapter
+		cm.mu.Unlock()
 	}
 
 	// Verificar que el canal esté activo
@@ -93,14 +173,9 @@ func (cm *DefaultChannelManager) SendMessage(ctx context.Context, channelID kern
 		return channels.ErrChannelInactive().WithDetail("channel_id", channelID.String())
 	}
 
-	// Obtener adapter
-	adapter, err := cm.GetAdapter(channel.Type)
-	if err != nil {
-		return err
-	}
-
-	// Enviar mensaje usando el adapter
-	log.Printf("📤 Sending message via channel %s (type: %s) to %s", channel.Name, channel.Type, msg.RecipientID)
+	// Enviar mensaje usando el adapter específico del canal
+	log.Printf("📤 Sending message via channel %s (type: %s) to %s",
+		channel.Name, channel.Type, msg.RecipientID)
 
 	if err := adapter.SendMessage(ctx, msg); err != nil {
 		log.Printf("❌ Failed to send message: %v", err)
@@ -114,9 +189,14 @@ func (cm *DefaultChannelManager) SendMessage(ctx context.Context, channelID kern
 }
 
 // ProcessIncomingMessage procesa un mensaje entrante
-func (cm *DefaultChannelManager) ProcessIncomingMessage(ctx context.Context, channelID kernel.ChannelID, msg channels.IncomingMessage) error {
+func (cm *DefaultChannelManager) ProcessIncomingMessage(
+	ctx context.Context,
+	tenantID kernel.TenantID,
+	channelID kernel.ChannelID,
+	msg channels.IncomingMessage,
+) error {
 	// Obtener canal
-	channel, err := cm.getChannel(ctx, channelID)
+	channel, err := cm.getChannel(ctx, tenantID, channelID)
 	if err != nil {
 		return err
 	}
@@ -128,48 +208,15 @@ func (cm *DefaultChannelManager) ProcessIncomingMessage(ctx context.Context, cha
 
 	log.Printf("📥 Processing incoming message from %s via channel %s", msg.SenderID, channel.Name)
 
-	// TODO: Aquí puedes agregar lógica adicional de procesamiento
-	// Por ejemplo, validación, transformación, etc.
-
 	return nil
 }
 
-// TestChannel prueba la conexión de un canal
-func (cm *DefaultChannelManager) TestChannel(ctx context.Context, channelID kernel.ChannelID) error {
-	// Obtener canal
-	channel, err := cm.getChannel(ctx, channelID)
-	if err != nil {
-		return err
-	}
-
-	// Obtener adapter
-	adapter, err := cm.GetAdapter(channel.Type)
-	if err != nil {
-		return err
-	}
-
-	// Obtener configuración del canal
-	config, err := channel.GetConfigStruct()
-	if err != nil {
-		return channels.ErrInvalidChannelConfig().
-			WithDetail("channel_id", channelID.String()).
-			WithDetail("error", err.Error())
-	}
-
-	// Probar conexión
-	log.Printf("🧪 Testing channel: %s (type: %s)", channel.Name, channel.Type)
-
-	if err := adapter.TestConnection(ctx, config); err != nil {
-		log.Printf("❌ Channel test failed: %v", err)
-		return err
-	}
-
-	log.Printf("✅ Channel test successful: %s", channel.Name)
-	return nil
-}
-
-// getChannel obtiene un canal por ID (primero de cache, luego de DB)
-func (cm *DefaultChannelManager) getChannel(ctx context.Context, channelID kernel.ChannelID) (*channels.Channel, error) {
+// getChannel obtiene un canal (primero de cache, luego de DB)
+func (cm *DefaultChannelManager) getChannel(
+	ctx context.Context,
+	tenantID kernel.TenantID,
+	channelID kernel.ChannelID,
+) (*channels.Channel, error) {
 	// Intentar obtener de cache primero
 	cm.mu.RLock()
 	channel, exists := cm.channels[channelID]
@@ -179,12 +226,18 @@ func (cm *DefaultChannelManager) getChannel(ctx context.Context, channelID kerne
 		return channel, nil
 	}
 
-	// Si no está en cache, intentar cargar de DB
-	// Nota: necesitamos el tenantID, pero no lo tenemos aquí
-	// Por ahora, retornamos error
-	log.Printf("⚠️  Channel %s not found in cache", channelID.String())
+	// Si no está en cache, buscar en DB
+	channel, err := cm.channelRepo.FindByID(ctx, channelID, tenantID)
+	if err != nil {
+		return nil, err
+	}
 
-	return nil, channels.ErrChannelNotFound().WithDetail("channel_id", channelID.String())
+	// Registrar en cache para futuras llamadas
+	cm.mu.Lock()
+	cm.channels[channelID] = channel
+	cm.mu.Unlock()
+
+	return channel, nil
 }
 
 // LoadChannels carga canales de un tenant en memoria
@@ -199,29 +252,32 @@ func (cm *DefaultChannelManager) LoadChannels(ctx context.Context, tenantID kern
 		return err
 	}
 
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-
+	// ✅ Registrar cada canal (esto crea los adapters)
+	successCount := 0
 	for _, ch := range channels {
-		cm.channels[ch.ID] = ch
-		log.Printf("📥 Loaded channel: %s (type: %s)", ch.Name, ch.Type)
+		if err := cm.RegisterChannel(ctx, *ch); err != nil {
+			log.Printf("⚠️  Failed to register channel %s: %v", ch.ID, err)
+			continue
+		}
+		successCount++
 	}
 
-	log.Printf("✅ Loaded %d channels for tenant %s", len(channels), tenantID.String())
+	log.Printf("✅ Loaded %d/%d channels for tenant %s", successCount, len(channels), tenantID.String())
 	return nil
 }
 
-// GetRegisteredAdapters retorna los tipos de adaptadores registrados
-func (cm *DefaultChannelManager) GetRegisteredAdapters() []channels.ChannelType {
+// GetAdapter obtiene el adapter para un canal específico
+func (cm *DefaultChannelManager) GetAdapter(channelID kernel.ChannelID) (channels.ChannelAdapter, error) {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
 
-	types := make([]channels.ChannelType, 0, len(cm.adapters))
-	for channelType := range cm.adapters {
-		types = append(types, channelType)
+	adapter, exists := cm.adapters[channelID]
+	if !exists {
+		return nil, channels.ErrChannelNotFound().
+			WithDetail("channel_id", channelID.String())
 	}
 
-	return types
+	return adapter, nil
 }
 
 // GetRegisteredChannels retorna los IDs de canales registrados
@@ -235,4 +291,57 @@ func (cm *DefaultChannelManager) GetRegisteredChannels() []kernel.ChannelID {
 	}
 
 	return ids
+}
+
+// GetChannelsByType retorna canales de un tipo específico
+func (cm *DefaultChannelManager) GetChannelsByType(channelType channels.ChannelType) []*channels.Channel {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+
+	var result []*channels.Channel
+	for _, channel := range cm.channels {
+		if channel.Type == channelType {
+			result = append(result, channel)
+		}
+	}
+
+	return result
+}
+
+// UnregisterChannel elimina un canal y su adapter
+func (cm *DefaultChannelManager) UnregisterChannel(channelID kernel.ChannelID) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	delete(cm.channels, channelID)
+	delete(cm.adapters, channelID)
+
+	log.Printf("🗑️  Channel unregistered: %s", channelID)
+}
+
+// ReloadChannel recarga un canal (útil cuando cambia la config)
+func (cm *DefaultChannelManager) ReloadChannel(ctx context.Context, channelID kernel.ChannelID, tenantID kernel.TenantID) error {
+	// Cargar canal actualizado desde DB
+	channel, err := cm.channelRepo.FindByID(ctx, channelID, tenantID)
+	if err != nil {
+		return err
+	}
+
+	// Eliminar el anterior
+	cm.UnregisterChannel(channelID)
+
+	// Registrar el nuevo
+	return cm.RegisterChannel(ctx, *channel)
+}
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+// safeSubstring extrae substring de forma segura
+func safeSubstring(s string, length int) string {
+	if len(s) <= length {
+		return s
+	}
+	return s[:length]
 }

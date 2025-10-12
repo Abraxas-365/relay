@@ -76,7 +76,7 @@ func (s *ChannelService) CreateChannel(ctx context.Context, req channels.CreateC
 	}
 
 	// Validar config usando el adapter si está disponible
-	if adapter, err := s.channelManager.GetAdapter(newChannel.Type); err == nil {
+	if adapter, err := s.channelManager.GetAdapter(channelID); err == nil {
 		if err := adapter.ValidateConfig(req.Config); err != nil {
 			return nil, channels.ErrInvalidChannelConfig().
 				WithDetail("reason", err.Error())
@@ -173,7 +173,7 @@ func (s *ChannelService) UpdateChannel(ctx context.Context, channelID kernel.Cha
 
 	if req.Config != nil {
 		// Validar config
-		if adapter, err := s.channelManager.GetAdapter(channel.Type); err == nil {
+		if adapter, err := s.channelManager.GetAdapter(channelID); err == nil {
 			if err := adapter.ValidateConfig(*req.Config); err != nil {
 				return nil, channels.ErrInvalidChannelConfig().WithDetail("reason", err.Error())
 			}
@@ -241,7 +241,7 @@ func (s *ChannelService) DeleteChannel(ctx context.Context, channelID kernel.Cha
 // ============================================================================
 
 // SendMessage envía un mensaje a través de un canal
-func (s *ChannelService) SendMessage(ctx context.Context, channelID kernel.ChannelID, msg channels.OutgoingMessage) (*channels.SendMessageResponse, error) {
+func (s *ChannelService) SendMessage(ctx context.Context, tenantID kernel.TenantID, channelID kernel.ChannelID, msg channels.OutgoingMessage) (*channels.SendMessageResponse, error) {
 	// Verificar que el canal existe y está activo
 	channel, err := s.channelRepo.FindByID(ctx, channelID, msg.Metadata["tenant_id"].(kernel.TenantID))
 	if err != nil {
@@ -254,7 +254,7 @@ func (s *ChannelService) SendMessage(ctx context.Context, channelID kernel.Chann
 
 	// Enviar mensaje usando el channel manager
 	startTime := time.Now()
-	if err := s.channelManager.SendMessage(ctx, channelID, msg); err != nil {
+	if err := s.channelManager.SendMessage(ctx, tenantID, channelID, msg); err != nil {
 		return &channels.SendMessageResponse{
 			Success:   false,
 			Timestamp: time.Now().Unix(),
@@ -279,7 +279,7 @@ func (s *ChannelService) TestChannel(ctx context.Context, channelID kernel.Chann
 	}
 
 	// Obtener adapter
-	adapter, err := s.channelManager.GetAdapter(channel.Type)
+	adapter, err := s.channelManager.GetAdapter(channelID)
 	if err != nil {
 		return &channels.TestChannelResponse{
 			Success: false,

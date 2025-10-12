@@ -389,7 +389,7 @@ func (c *Container) initChannelComponents() {
 	log.Println("    ✅ Channel repository initialized")
 
 	// Initialize the channel manager FIRST
-	c.ChannelManager = channelmanager.NewDefaultChannelManager(c.ChannelRepo)
+	c.ChannelManager = channelmanager.NewDefaultChannelManager(c.ChannelRepo, c.RedisClient)
 	log.Println("    ✅ Channel manager initialized")
 
 	// Initialize WhatsApp adapter (base instance)
@@ -397,12 +397,6 @@ func (c *Container) initChannelComponents() {
 		channels.WhatsAppConfig{}, // Empty config, overridden per channel
 		c.RedisClient,
 	)
-	c.ChannelManager.RegisterAdapter(c.WhatsAppAdapter)
-	log.Println("    ✅ WhatsApp adapter registered")
-
-	// TODO: Register other adapters as needed
-	// telegramAdapter := telegram.NewTelegramAdapter(...)
-	// c.ChannelManager.RegisterAdapter(telegramAdapter)
 
 	// Initialize channel service
 	c.ChannelService = channelsrv.NewChannelService(
@@ -445,6 +439,7 @@ func (c *Container) initEngineComponents() {
 	// Initialize workflow executor with ParserManager and all step executors
 	c.WorkflowExecutor = workflowexec.NewDefaultWorkflowExecutor(
 		c.ParserManager, // 🔍 ParserManager is now the first parameter
+		c.ChannelManager,
 		c.ActionExecutor,
 		c.ConditionExecutor,
 		c.ResponseExecutor,

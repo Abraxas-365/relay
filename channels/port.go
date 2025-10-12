@@ -71,17 +71,11 @@ type ChannelManager interface {
 	RegisterChannel(ctx context.Context, channel Channel) error
 
 	// SendMessage envía un mensaje a través de un canal
-	SendMessage(ctx context.Context, channelID kernel.ChannelID, msg OutgoingMessage) error
+	SendMessage(ctx context.Context, tenantID kernel.TenantID, channelID kernel.ChannelID, msg OutgoingMessage) error
 
 	// ProcessIncomingMessage procesa un mensaje entrante
-	ProcessIncomingMessage(ctx context.Context, channelID kernel.ChannelID, msg IncomingMessage) error
+	ProcessIncomingMessage(ctx context.Context, tenantID kernel.TenantID, channelID kernel.ChannelID, msg IncomingMessage) error
 
 	// GetAdapter obtiene el adapter para un tipo de canal
-	GetAdapter(channelType ChannelType) (ChannelAdapter, error)
-
-	// RegisterAdapter registra un adapter
-	RegisterAdapter(adapter ChannelAdapter)
-
-	// TestChannel prueba la conexión de un canal
-	TestChannel(ctx context.Context, channelID kernel.ChannelID) error
+	GetAdapter(channelID kernel.ChannelID) (ChannelAdapter, error)
 }

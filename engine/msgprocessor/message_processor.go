@@ -99,8 +99,7 @@ func (mp *MessageProcessor) ProcessMessage(ctx context.Context, msg engine.Messa
 	// // 9. Enviar respuesta si es necesario
 	if result.ShouldRespond && result.Response != "" {
 		if err := mp.sendResponse(ctx, msg, result.Response); err != nil {
-			// Log error pero marcar mensaje como procesado
-			// logger.Error("Failed to send response", err)
+			log.Printf("❌ Failed to send response: %v", err)
 		}
 	}
 
@@ -282,20 +281,31 @@ func (mp *MessageProcessor) updateSessionFromResult(
 }
 
 // sendResponse envía una respuesta al canal
-func (mp *MessageProcessor) sendResponse(ctx context.Context, msg engine.Message, response string) error {
+func (mp *MessageProcessor) sendResponse(ctx context.Context, originalMsg engine.Message, responseText string) error {
+	log.Printf("📤 Sending response to %s via channel %s", originalMsg.SenderID, originalMsg.ChannelID.String())
+
+	// Build outgoing message
 	outgoingMsg := channels.OutgoingMessage{
-		RecipientID: msg.SenderID,
+		RecipientID: originalMsg.SenderID,
 		Content: channels.MessageContent{
 			Type: "text",
-			Text: response,
+			Text: responseText,
 		},
 		Metadata: map[string]any{
-			"in_reply_to": msg.ID.String(),
-			"timestamp":   time.Now().Unix(),
+			"in_reply_to":        originalMsg.ID.String(),
+			"workflow_triggered": true,
+			"timestamp":          time.Now().Unix(),
 		},
 	}
 
-	return mp.channelManager.SendMessage(ctx, msg.ChannelID, outgoingMsg)
+	// Send via channel manager
+	if err := mp.channelManager.SendMessage(ctx, originalMsg.TenantID, originalMsg.ChannelID, outgoingMsg); err != nil {
+		log.Printf("❌ Failed to send response: %v", err)
+		return errx.Wrap(err, "failed to send response via channel", errx.TypeInternal)
+	}
+
+	log.Printf("✅ Response sent successfully to %s", originalMsg.SenderID)
+	return nil
 }
 
 // handleNoWorkflow maneja mensajes cuando no hay workflow disponible
