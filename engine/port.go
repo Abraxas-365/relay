@@ -59,8 +59,8 @@ type WorkflowRepository interface {
 type SessionRepository interface {
 	// CRUD básico
 	Save(ctx context.Context, session Session) error
-	FindByID(ctx context.Context, id string) (*Session, error)
-	Delete(ctx context.Context, id string) error
+	FindByID(ctx context.Context, id kernel.SessionID) (*Session, error)
+	Delete(ctx context.Context, id kernel.SessionID) error
 
 	// Búsquedas
 	FindByChannelAndSender(ctx context.Context, channelID kernel.ChannelID, senderID string) (*Session, error)
@@ -73,7 +73,7 @@ type SessionRepository interface {
 
 	// Mantenimiento
 	CleanExpired(ctx context.Context) error
-	ExtendExpiration(ctx context.Context, id string, duration int64) error // duration en segundos
+	ExtendExpiration(ctx context.Context, id kernel.SessionID, duration int64) error // duration en segundos
 
 	// Stats
 	CountActive(ctx context.Context, tenantID kernel.TenantID) (int, error)
@@ -90,17 +90,17 @@ type SessionManager interface {
 
 	// Actualizar sesión
 	Update(ctx context.Context, session Session) error
-	UpdateContext(ctx context.Context, sessionID string, key string, value any) error
-	UpdateState(ctx context.Context, sessionID string, state string) error
+	UpdateContext(ctx context.Context, sessionID kernel.SessionID, key string, value any) error
+	UpdateState(ctx context.Context, sessionID kernel.SessionID, state string) error
 
 	// Eliminar sesión
-	Delete(ctx context.Context, sessionID string) error
+	Delete(ctx context.Context, sessionID kernel.SessionID) error
 
 	// Obtener sesión
-	Get(ctx context.Context, sessionID string) (*Session, error)
+	Get(ctx context.Context, sessionID kernel.SessionID) (*Session, error)
 
 	// Extender expiración
-	ExtendSession(ctx context.Context, sessionID string) error
+	ExtendSession(ctx context.Context, sessionID kernel.SessionID) error
 
 	// Limpiar sesiones expiradas
 	CleanExpiredSessions(ctx context.Context) error

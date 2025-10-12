@@ -17,12 +17,13 @@ var ErrRegistry = errx.NewRegistry("PARSER")
 // ============================================================================
 
 var (
-	CodeParserNotFound      = ErrRegistry.Register("PARSER_NOT_FOUND", errx.TypeNotFound, http.StatusNotFound, "Parser no encontrado")
-	CodeParserAlreadyExists = ErrRegistry.Register("PARSER_ALREADY_EXISTS", errx.TypeConflict, http.StatusConflict, "Parser ya existe")
-	CodeInvalidParserType   = ErrRegistry.Register("INVALID_PARSER_TYPE", errx.TypeValidation, http.StatusBadRequest, "Tipo de parser inválido")
-	CodeInvalidParserConfig = ErrRegistry.Register("INVALID_PARSER_CONFIG", errx.TypeValidation, http.StatusBadRequest, "Configuración de parser inválida")
-	CodeParserInactive      = ErrRegistry.Register("PARSER_INACTIVE", errx.TypeBusiness, http.StatusForbidden, "Parser está inactivo")
-	CodeParserNotSupported  = ErrRegistry.Register("PARSER_NOT_SUPPORTED", errx.TypeValidation, http.StatusBadRequest, "Tipo de parser no soportado")
+	CodeParserNotFound         = ErrRegistry.Register("PARSER_NOT_FOUND", errx.TypeNotFound, http.StatusNotFound, "Parser no encontrado")
+	CodeParserAlreadyExists    = ErrRegistry.Register("PARSER_ALREADY_EXISTS", errx.TypeConflict, http.StatusConflict, "Parser ya existe")
+	CodeInvalidParserType      = ErrRegistry.Register("INVALID_PARSER_TYPE", errx.TypeValidation, http.StatusBadRequest, "Tipo de parser inválido")
+	CodeInvalidParserConfig    = ErrRegistry.Register("INVALID_PARSER_CONFIG", errx.TypeValidation, http.StatusBadRequest, "Configuración de parser inválida")
+	CodeParserInactive         = ErrRegistry.Register("PARSER_INACTIVE", errx.TypeBusiness, http.StatusForbidden, "Parser está inactivo")
+	CodeParserNotSupported     = ErrRegistry.Register("PARSER_NOT_SUPPORTED", errx.TypeValidation, http.StatusBadRequest, "Tipo de parser no soportado")
+	CodeParserTypeNotSupported = ErrRegistry.Register("PARSER_TYPE_NOT_SUPPORTED", errx.TypeValidation, http.StatusBadRequest, "Tipo de parser no soportado")
 )
 
 // ============================================================================
@@ -127,6 +128,73 @@ var (
 	CodeCacheWriteFailed = ErrRegistry.Register("CACHE_WRITE_FAILED", errx.TypeInternal, http.StatusInternalServerError, "Fallo al escribir cache")
 	CodeCacheClearFailed = ErrRegistry.Register("CACHE_CLEAR_FAILED", errx.TypeInternal, http.StatusInternalServerError, "Fallo al limpiar cache")
 )
+
+// ============================================================================
+// Error Codes - Parser Engine
+// ============================================================================
+
+var (
+	CodeParserEngineNotFound      = ErrRegistry.Register("PARSER_ENGINE_NOT_FOUND", errx.TypeNotFound, http.StatusNotFound, "Motor de parser no encontrado")
+	CodeParserEngineNotRegistered = ErrRegistry.Register("PARSER_ENGINE_NOT_REGISTERED", errx.TypeValidation, http.StatusBadRequest, "Motor de parser no registrado")
+	CodeInvalidConfigType         = ErrRegistry.Register("INVALID_CONFIG_TYPE", errx.TypeValidation, http.StatusBadRequest, "Tipo de configuración inválido")
+)
+
+// ============================================================================
+// Error Codes - Workflow Integration
+// ============================================================================
+
+var (
+	CodeStepExecutionFailed    = ErrRegistry.Register("STEP_EXECUTION_FAILED", errx.TypeInternal, http.StatusInternalServerError, "Fallo al ejecutar paso")
+	CodeInvalidStepConfig      = ErrRegistry.Register("INVALID_STEP_CONFIG", errx.TypeValidation, http.StatusBadRequest, "Configuración de paso inválida")
+	CodeParserIDNotFound       = ErrRegistry.Register("PARSER_ID_NOT_FOUND", errx.TypeValidation, http.StatusBadRequest, "ID de parser no encontrado en configuración")
+	CodeToolExecutionFailed    = ErrRegistry.Register("TOOL_EXECUTION_FAILED", errx.TypeInternal, http.StatusInternalServerError, "Fallo al ejecutar herramienta")
+	CodeWebhookExecutionFailed = ErrRegistry.Register("WEBHOOK_EXECUTION_FAILED", errx.TypeExternal, http.StatusBadGateway, "Fallo al ejecutar webhook")
+	CodeInvalidToolConfig      = ErrRegistry.Register("INVALID_TOOL_CONFIG", errx.TypeValidation, http.StatusBadRequest, "Configuración de herramienta inválida")
+)
+
+// ============================================================================
+// Error Constructor Functions - Parser Engine
+// ============================================================================
+
+func ErrParserEngineNotFound() *errx.Error {
+	return ErrRegistry.New(CodeParserEngineNotFound)
+}
+
+func ErrParserEngineNotRegistered() *errx.Error {
+	return ErrRegistry.New(CodeParserEngineNotRegistered)
+}
+
+func ErrInvalidConfigType() *errx.Error {
+	return ErrRegistry.New(CodeInvalidConfigType)
+}
+
+// ============================================================================
+// Error Constructor Functions - Workflow Integration
+// ============================================================================
+
+func ErrStepExecutionFailed() *errx.Error {
+	return ErrRegistry.New(CodeStepExecutionFailed)
+}
+
+func ErrInvalidStepConfig() *errx.Error {
+	return ErrRegistry.New(CodeInvalidStepConfig)
+}
+
+func ErrParserIDNotFound() *errx.Error {
+	return ErrRegistry.New(CodeParserIDNotFound)
+}
+
+func ErrToolExecutionFailed() *errx.Error {
+	return ErrRegistry.New(CodeToolExecutionFailed)
+}
+
+func ErrWebhookExecutionFailed() *errx.Error {
+	return ErrRegistry.New(CodeWebhookExecutionFailed)
+}
+
+func ErrInvalidToolConfig() *errx.Error {
+	return ErrRegistry.New(CodeInvalidToolConfig)
+}
 
 // ============================================================================
 // Error Constructor Functions - Parser
@@ -350,4 +418,8 @@ func ErrCacheWriteFailed() *errx.Error {
 
 func ErrCacheClearFailed() *errx.Error {
 	return ErrRegistry.New(CodeCacheClearFailed)
+}
+
+func ErrParserTypeNotSupported() *errx.Error {
+	return ErrRegistry.New(CodeParserTypeNotSupported)
 }

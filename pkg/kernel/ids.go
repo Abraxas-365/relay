@@ -47,3 +47,9 @@ type ToolID string
 func NewToolID(id string) ToolID { return ToolID(id) }
 func (r ToolID) String() string  { return string(r) }
 func (r ToolID) IsEmpty() bool   { return string(r) == "" }
+
+type SessionID string
+
+func NewSessionID(id string) SessionID { return SessionID(id) }
+func (r SessionID) String() string     { return string(r) }
+func (r SessionID) IsEmpty() bool      { return string(r) == "" }

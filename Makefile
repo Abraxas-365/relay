@@ -2,7 +2,7 @@ export POSTGRES_DB = appdb
 export POSTGRES_USER = appuser
 export POSTGRES_PASSWORD = supersecret
 export POSTGRES_HOST = localhost
-export POSTGRES_PORT = 5443  # CHANGED FROM 5432
+export POSTGRES_PORT = 5449  # CHANGED FROM 5432
 
 
 # Server
@@ -26,7 +26,7 @@ export DB_CONN_MAX_LIFETIME = 5m
 
 # Redis
 export REDIS_HOST = localhost
-export REDIS_PORT = 6380
+export REDIS_PORT = 6381
 export REDIS_PASSWORD =
 export REDIS_DB = 0
 
@@ -68,7 +68,7 @@ db-down:
 
 # View database logs
 db-logs:
-	docker compose logs -f facturamelo_postgres
+	docker compose logs -f relay
 
 # Show the connection string
 conn:
@@ -76,26 +76,26 @@ conn:
 
 # Open psql in the container
 psql:
-	docker exec -it facturamelo_postgres psql -U $(POSTGRES_USER) -d $(POSTGRES_DB)
+	docker exec -it relay psql -U $(POSTGRES_USER) -d $(POSTGRES_DB)
 
 # Run migrations (create tables)
 migrate:
 	@echo "Running migrations..."
-	docker exec -i facturamelo_postgres psql -U $(POSTGRES_USER) -d $(POSTGRES_DB) < migrations/001_genesis.sql
-	docker exec -i facturamelo_postgres psql -U $(POSTGRES_USER) -d $(POSTGRES_DB) < migrations/002_workflows.sql
-	docker exec -i facturamelo_postgres psql -U $(POSTGRES_USER) -d $(POSTGRES_DB) < migrations/003_sire.sql
+	docker exec -i relay psql -U $(POSTGRES_USER) -d $(POSTGRES_DB) < migrations/001_genesis.sql
+	docker exec -i relay psql -U $(POSTGRES_USER) -d $(POSTGRES_DB) < migrations/002_workflows.sql
+	docker exec -i relay psql -U $(POSTGRES_USER) -d $(POSTGRES_DB) < migrations/003_sire.sql
 	@echo "✅ Migrations completed"
 
 # Seed test data
 seed:
 	@echo "Seeding test data..."
-	docker exec -i facturamelo_postgres psql -U $(POSTGRES_USER) -d $(POSTGRES_DB) < migrations/seed_test_data.sql
+	docker exec -i relay psql -U $(POSTGRES_USER) -d $(POSTGRES_DB) < migrations/seed_test_data.sql
 	@echo "✅ Test data seeded"
 
 # Clean database (drop all tables)
 clean:
 	@echo "⚠️  Cleaning database..."
-	docker exec -i facturamelo_postgres psql -U $(POSTGRES_USER) -d $(POSTGRES_DB) -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+	docker exec -i relay psql -U $(POSTGRES_USER) -d $(POSTGRES_DB) -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
 	@echo "✅ Database cleaned"
 
 # Full setup: up + migrate + seed

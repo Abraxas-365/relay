@@ -42,6 +42,12 @@ type ListParsersRequest struct {
 	Search   string          `json:"search,omitempty"`
 }
 
+func (lpr ListParsersRequest) GetOffset() int {
+	page := lpr.Page
+	size := lpr.PageSize
+	return (page - 1) * size
+}
+
 // ParserListResponse lista paginada de parsers
 type ParserListResponse = storex.Paginated[Parser]
 

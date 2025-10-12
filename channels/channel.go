@@ -37,6 +37,7 @@ const (
 	ChannelTypeSMS       ChannelType = "SMS"
 	ChannelTypeWebChat   ChannelType = "WEBCHAT"
 	ChannelTypeVoice     ChannelType = "VOICE"
+	ChannelTypeTestHTTP  ChannelType = "TEST_HTTP"
 )
 
 // ============================================================================
@@ -575,10 +576,17 @@ func (c *Channel) GetConfigStruct() (ChannelConfig, error) {
 			return nil, err
 		}
 		return config, nil
+	case ChannelTypeTestHTTP:
+		var config TestHTTPConfig
+		if err := json.Unmarshal(c.Config, &config); err != nil {
+			return nil, err
+		}
+		return config, nil
 
 	default:
 		return nil, ErrChannelNotSupported().WithDetail("type", string(c.Type))
 	}
+
 }
 
 // GetFeatures obtiene las features del canal
@@ -638,4 +646,30 @@ func NewChannelFromConfig(
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}, nil
+}
+
+type TestHTTPConfig struct {
+	Provider string `json:"provider"` // test
+	Secret   string `json:"secret,omitempty"`
+}
+
+func (c TestHTTPConfig) Validate() error {
+	return nil // No required fields for testing
+}
+
+func (c TestHTTPConfig) GetProvider() string {
+	return "test"
+}
+
+func (c TestHTTPConfig) GetType() ChannelType {
+	return ChannelTypeTestHTTP
+}
+
+func (c TestHTTPConfig) GetFeatures() ChannelFeatures {
+	return ChannelFeatures{
+		SupportsText:        true,
+		SupportsAttachments: false,
+		MaxMessageLength:    10000,
+		SupportedMimeTypes:  []string{},
+	}
 }

@@ -105,7 +105,7 @@ const (
 
 // Session representa contexto de conversación
 type Session struct {
-	ID             string           `db:"id" json:"id"`
+	ID             kernel.SessionID `db:"id" json:"id"`
 	TenantID       kernel.TenantID  `db:"tenant_id" json:"tenant_id"`
 	ChannelID      kernel.ChannelID `db:"channel_id" json:"channel_id"`
 	SenderID       string           `db:"sender_id" json:"sender_id"`

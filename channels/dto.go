@@ -158,6 +158,12 @@ type ListChannelsRequest struct {
 	Search   string          `json:"search,omitempty"`
 }
 
+func (lcr ListChannelsRequest) GetOffset() int {
+	page := lcr.Page
+	size := lcr.PageSize
+	return (page - 1) * size
+}
+
 // ============================================================================
 // Response DTOs
 // ============================================================================

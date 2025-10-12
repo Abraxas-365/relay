@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"time"
+
 	"github.com/Abraxas-365/craftable/storex"
 	"github.com/Abraxas-365/relay/pkg/kernel"
 )
@@ -33,6 +35,12 @@ type MessageListRequest struct {
 	Status    *MessageStatus    `json:"status,omitempty"`
 	From      *string           `json:"from,omitempty"` // ISO 8601 date
 	To        *string           `json:"to,omitempty"`   // ISO 8601 date
+}
+
+func (mlr MessageListRequest) GetOffset() int {
+	page := mlr.Page
+	size := mlr.PageSize
+	return (page - 1) * size
 }
 
 // MessageListResponse lista paginada de mensajes
@@ -79,6 +87,12 @@ type WorkflowListRequest struct {
 	Search   string          `json:"search,omitempty"`
 }
 
+func (wlr WorkflowListRequest) GetOffset() int {
+	page := wlr.Page
+	size := wlr.PageSize
+	return (page - 1) * size
+}
+
 // WorkflowListResponse lista paginada de workflows
 type WorkflowListResponse = storex.Paginated[Workflow]
 
@@ -107,10 +121,13 @@ type SessionResponse struct {
 type SessionListRequest struct {
 	storex.PaginationOptions
 
-	TenantID  kernel.TenantID   `json:"tenant_id" validate:"required"`
-	ChannelID *kernel.ChannelID `json:"channel_id,omitempty"`
-	SenderID  *string           `json:"sender_id,omitempty"`
-	Active    *bool             `json:"active,omitempty"` // Si no ha expirado
+	IsActive     *bool             `json:"is_active,omitempty"`
+	CurrentState *string           `json:"current_state,omitempty"`
+	TenantID     kernel.TenantID   `json:"tenant_id" validate:"required"`
+	ChannelID    *kernel.ChannelID `json:"channel_id,omitempty"`
+	From         *time.Time        `json:"from,omitempty"`
+	To           *time.Time        `json:"to,omitempty"`
+	SenderID     *string           `json:"sender_id,omitempty"`
 }
 
 // SessionListResponse lista paginada de sesiones
@@ -240,4 +257,9 @@ func (w *Workflow) ToDTO() WorkflowDetailsDTO {
 		IsActive:  w.IsActive,
 		StepCount: len(w.Steps),
 	}
+}
+
+// GetOffset returns the offset for pagination
+func (r SessionListRequest) GetOffset() int {
+	return (r.Page - 1) * r.PageSize
 }

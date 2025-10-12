@@ -126,4 +126,3 @@ func ErrWebhookProcessingFailed() *errx.Error {
 func ErrFeatureNotSupported() *errx.Error {
 	return ErrRegistry.New(CodeFeatureNotSupported)
 }
-

@@ -1,13 +1,13 @@
-package enginesrv
+package msgprocessor
 
 import (
 	"context"
+	"log"
 	"time"
 
 	"github.com/Abraxas-365/craftable/errx"
 	"github.com/Abraxas-365/relay/channels"
 	"github.com/Abraxas-365/relay/engine"
-	"github.com/Abraxas-365/relay/parser"
 	"github.com/Abraxas-365/relay/pkg/kernel"
 )
 
@@ -18,7 +18,6 @@ type MessageProcessor struct {
 	sessionManager engine.SessionManager
 	workflowExec   engine.WorkflowExecutor
 	channelManager channels.ChannelManager
-	parserSelector parser.ParserSelector
 }
 
 // NewMessageProcessor crea una nueva instancia del procesador de mensajes
@@ -28,7 +27,6 @@ func NewMessageProcessor(
 	sessionManager engine.SessionManager,
 	workflowExec engine.WorkflowExecutor,
 	channelManager channels.ChannelManager,
-	parserSelector parser.ParserSelector,
 ) *MessageProcessor {
 	return &MessageProcessor{
 		messageRepo:    messageRepo,
@@ -36,12 +34,12 @@ func NewMessageProcessor(
 		sessionManager: sessionManager,
 		workflowExec:   workflowExec,
 		channelManager: channelManager,
-		parserSelector: parserSelector,
 	}
 }
 
 // ProcessMessage es el entry point principal para procesar mensajes
 func (mp *MessageProcessor) ProcessMessage(ctx context.Context, msg engine.Message) error {
+	log.Printf("🚀 Processing message ID: %s from Sender: %s on Channel: %s", msg.ID.String(), msg.SenderID, msg.ChannelID.String())
 	// 1. Validar mensaje
 	if !msg.IsValid() {
 		return engine.ErrMessageProcessingFailed().WithDetail("reason", "invalid message")
@@ -65,11 +63,18 @@ func (mp *MessageProcessor) ProcessMessage(ctx context.Context, msg engine.Messa
 	session.AddMessage(msg.ID, "user")
 
 	// 5. Buscar workflow apropiado
+	log.Printf("🔍 Searching for matching workflows for message: %s", msg.ID.String())
 	workflows, err := mp.findMatchingWorkflows(ctx, msg)
 	if err != nil {
+		log.Printf("❌ Error finding workflows: %v", err)
 		msg.MarkAsFailed()
 		mp.messageRepo.Save(ctx, msg)
 		return errx.Wrap(err, "failed to find workflows", errx.TypeInternal)
+	}
+	for _, wf := range workflows {
+		// Log workflow IDs found
+		log.Printf("🔍 Found matching workflow: %s for message: %s", wf.ID.String(), msg.ID.String())
+
 	}
 
 	// 6. Si no hay workflows, manejar con lógica por defecto
@@ -85,13 +90,13 @@ func (mp *MessageProcessor) ProcessMessage(ctx context.Context, msg engine.Messa
 		return errx.Wrap(err, "failed to execute workflow", errx.TypeInternal)
 	}
 
-	// 8. Actualizar sesión con el resultado
+	// // 8. Actualizar sesión con el resultado
 	if err := mp.updateSessionFromResult(ctx, session, result); err != nil {
 		// Log error pero no fallar
 		// logger.Error("Failed to update session", err)
 	}
 
-	// 9. Enviar respuesta si es necesario
+	// // 9. Enviar respuesta si es necesario
 	if result.ShouldRespond && result.Response != "" {
 		if err := mp.sendResponse(ctx, msg, result.Response); err != nil {
 			// Log error pero marcar mensaje como procesado
@@ -195,12 +200,15 @@ func (mp *MessageProcessor) findMatchingWorkflows(ctx context.Context, msg engin
 
 	workflows, err := mp.workflowRepo.FindActiveByTrigger(ctx, trigger, msg.TenantID)
 	if err != nil {
+		log.Printf("❌ Error retrieving workflows from repository: %v", err)
 		return nil, err
 	}
+	log.Printf("🔍 Retrieved %d workflows from repository for tenant: %s", len(workflows), msg.TenantID.String())
 
 	// Filtrar workflows que realmente coincidan
 	var matching []*engine.Workflow
 	for _, wf := range workflows {
+		log.Printf("🔍 Evaluating workflow: %s for message: %s", wf.ID.String(), msg.ID.String())
 		if wf.MatchesTrigger(trigger) {
 			matching = append(matching, wf)
 		}
@@ -293,16 +301,6 @@ func (mp *MessageProcessor) sendResponse(ctx context.Context, msg engine.Message
 // handleNoWorkflow maneja mensajes cuando no hay workflow disponible
 func (mp *MessageProcessor) handleNoWorkflow(ctx context.Context, msg engine.Message, session *engine.Session) error {
 	// Intentar usar parser por defecto si está disponible
-	if mp.parserSelector != nil {
-		// Buscar parsers disponibles para el tenant
-		// parsers, err := mp.parserRepo.FindByTenant(ctx, msg.TenantID)
-		// if err == nil && len(parsers) > 0 {
-		//     parser, err := mp.parserSelector.SelectParser(ctx, msg, parsers)
-		//     if err == nil && parser != nil {
-		//         // Ejecutar parser y responder
-		//     }
-		// }
-	}
 
 	// Respuesta por defecto
 	defaultResponse := "Gracias por tu mensaje. En este momento no hay workflows configurados para procesarlo."

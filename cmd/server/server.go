@@ -32,8 +32,8 @@ func main() {
 	// Configurar logger
 	setupLogger(cfg)
 
-	log.Println("🚀 Starting Facturamelo API...")
-	log.Printf("📍 Environment: %s", cfg.Server.Environment)
+	log.Println("🚀 Starting Relay API...")
+	log.Printf("🌍 Environment: %s", cfg.Server.Environment)
 
 	// Conectar a PostgreSQL
 	log.Println("🔌 Connecting to PostgreSQL...")
@@ -56,24 +56,18 @@ func main() {
 	// Inicializar contenedor de dependencias
 	log.Println("📦 Initializing dependency container...")
 	container := NewContainer(cfg, db, redisClient)
-	defer container.Cleanup() // Cleanup on exit
+	defer container.Cleanup()
 	log.Println("✅ Dependencies initialized")
 
 	// Verificar health de los servicios
 	health := container.HealthCheck()
-	log.Printf("🏥 Health check: Database=%v, Redis=%v, Scheduler=%v",
-		health["database"], health["redis"], health["scheduler"])
-
-	// =================================================================
-	// INICIAR SCHEDULER
-	// =================================================================
-	log.Println("✅ Scheduler started")
-	// =================================================================
+	log.Printf("🏥 Health check: Database=%v, Redis=%v, EventBus=%v",
+		health["database"], health["redis"], health["event_bus"])
 
 	// Crear aplicación Fiber
 	app := fiber.New(fiber.Config{
-		AppName:      "Facturamelo API",
-		ServerHeader: "Facturamelo",
+		AppName:      "Relay API",
+		ServerHeader: "Relay",
 		ReadTimeout:  cfg.Server.ReadTimeout,
 		WriteTimeout: cfg.Server.WriteTimeout,
 		ErrorHandler: errxfiber.FiberErrorHandler(),
@@ -87,15 +81,16 @@ func main() {
 	setupRoutes(app, container)
 	log.Println("✅ Routes configured")
 
-	// Log de servicios registrados
-	log.Printf("📋 Registered services: %v", container.GetServiceNames())
-	log.Printf("📋 Registered repositories: %v", container.GetRepositoryNames())
+	// Log de componentes registrados
+	log.Printf("📦 Registered services: %v", container.GetServiceNames())
+	log.Printf("📚 Registered repositories: %v", container.GetRepositoryNames())
+	log.Printf("⚡ Registered step executors: %v", container.GetStepExecutorNames())
 
 	// Iniciar servidor en goroutine
 	go func() {
 		addr := fmt.Sprintf(":%s", cfg.Server.Port)
-		log.Printf("🚀 Server listening on %s", addr)
-		log.Printf("🌍 Local: http://localhost%s", addr)
+		log.Printf("🌐 Server listening on %s", addr)
+		log.Printf("🔗 Local: http://localhost%s", addr)
 		if err := app.Listen(addr); err != nil {
 			log.Fatalf("Failed to start server: %v", err)
 		}
@@ -108,7 +103,6 @@ func main() {
 
 	log.Println("⏸️  Shutting down server...")
 
-	// Apagado graceful del servidor Fiber
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer cancel()
 
@@ -123,7 +117,6 @@ func main() {
 func setupLogger(cfg *config.Config) {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	if cfg.Server.Environment == "production" {
-		// En producción podrías usar un logger más sofisticado
 		log.SetFlags(log.LstdFlags)
 	}
 }
@@ -159,19 +152,18 @@ func setupMiddleware(app *fiber.App, cfg *config.Config) {
 
 // setupRoutes configura todas las rutas de la aplicación
 func setupRoutes(app *fiber.App, c *Container) {
-
-	log.Println("  ✓ Invoice routes registered")
-	// Health check (enhanced)
+	// Health check
 	app.Get("/health", healthCheckHandler(c))
 
 	// Root endpoint
 	app.Get("/", func(ctx *fiber.Ctx) error {
 		return ctx.JSON(fiber.Map{
-			"message":  "Facturamelo API",
-			"version":  "1.0.0",
-			"status":   "running",
-			"uptime":   time.Since(startTime).String(),
-			"services": c.GetServiceNames(),
+			"message":        "Relay API",
+			"version":        "1.0.0",
+			"status":         "running",
+			"uptime":         time.Since(startTime).String(),
+			"services":       c.GetServiceNames(),
+			"step_executors": c.GetStepExecutorNames(),
 		})
 	})
 
@@ -181,10 +173,24 @@ func setupRoutes(app *fiber.App, c *Container) {
 	c.AuthHandlers.RegisterRoutes(app)
 
 	// =================================================================
-	// BUSINESS ROUTES
+	// TEST ROUTES (Development/Testing)
 	// =================================================================
+	if c.Config.Server.Environment == "development" {
+		c.TestRoutes.Setup(app)
+		log.Println("  ✓ Test routes registered")
+	}
 
-	// Areas routes
+	// =================================================================
+	// PROTECTED API ROUTES
+	// =================================================================
+	api := app.Group("/api")
+	api.Use(c.AuthMiddleware.Authenticate())
+
+	// TODO: Add your business routes here
+	// api.Get("/channels", channelHandlers.List)
+	// api.Post("/workflows", workflowHandlers.Create)
+	// api.Post("/messages", messageHandlers.Create)
+	// etc...
 
 	// =================================================================
 	// DEBUG ROUTES (only in development)
@@ -192,9 +198,11 @@ func setupRoutes(app *fiber.App, c *Container) {
 	if c.Config.Server.Environment == "development" {
 		app.Get("/debug/container", func(ctx *fiber.Ctx) error {
 			return ctx.JSON(fiber.Map{
-				"services":     c.GetServiceNames(),
-				"repositories": c.GetRepositoryNames(),
-				"health":       c.HealthCheck(),
+				"services":       c.GetServiceNames(),
+				"repositories":   c.GetRepositoryNames(),
+				"step_executors": c.GetStepExecutorNames(),
+				"health":         c.HealthCheck(),
+				"event_metrics":  c.GetEventBusMetrics(),
 			})
 		})
 	}
@@ -213,10 +221,8 @@ func setupRoutes(app *fiber.App, c *Container) {
 // healthCheckHandler handler de health check mejorado
 func healthCheckHandler(c *Container) fiber.Handler {
 	return func(ctx *fiber.Ctx) error {
-		// Usar el método HealthCheck del container
 		health := c.HealthCheck()
 
-		// Determinar si todos los servicios están saludables
 		allHealthy := true
 		for _, healthy := range health {
 			if !healthy {
@@ -239,13 +245,17 @@ func healthCheckHandler(c *Container) fiber.Handler {
 			"uptime":    time.Since(startTime).String(),
 			"services":  health,
 			"version":   "1.0.0",
+			"components": fiber.Map{
+				"services":       c.GetServiceNames(),
+				"repositories":   c.GetRepositoryNames(),
+				"step_executors": c.GetStepExecutorNames(),
+			},
 		})
 	}
 }
 
 // getCorsOrigins retorna los orígenes permitidos para CORS
 func getCorsOrigins(cfg *config.Config) string {
-	// Permite override via variable de entorno (lista separada por comas)
 	if origins := os.Getenv("CORS_ALLOWED_ORIGINS"); origins != "" {
 		return origins
 	}
@@ -254,6 +264,5 @@ func getCorsOrigins(cfg *config.Config) string {
 		return "https://yourdomain.com"
 	}
 
-	// Evitar wildcard cuando AllowCredentials=true; usar orígenes comunes de desarrollo
 	return "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173"
 }
