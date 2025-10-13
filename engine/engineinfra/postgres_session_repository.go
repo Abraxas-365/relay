@@ -35,9 +35,11 @@ type dbSession struct {
 	Context        json.RawMessage `db:"context"`
 	History        json.RawMessage `db:"history"`
 	CurrentState   string          `db:"current_state"`
+	Status         string          `db:"status"`
 	ExpiresAt      time.Time       `db:"expires_at"`
 	CreatedAt      time.Time       `db:"created_at"`
 	LastActivityAt time.Time       `db:"last_activity_at"`
+	ClosedAt       *time.Time      `db:"closed_at"`
 }
 
 // toDBSession converts domain Session to dbSession
@@ -68,9 +70,11 @@ func toDBSession(session engine.Session) (*dbSession, error) {
 		Context:        contextJSON,
 		History:        historyJSON,
 		CurrentState:   session.CurrentState,
+		Status:         string(session.Status),
 		ExpiresAt:      session.ExpiresAt,
 		CreatedAt:      session.CreatedAt,
 		LastActivityAt: session.LastActivityAt,
+		ClosedAt:       session.ClosedAt,
 	}, nil
 }
 
@@ -98,9 +102,11 @@ func toDomainSession(dbSess *dbSession) (*engine.Session, error) {
 		Context:        context,
 		History:        history,
 		CurrentState:   dbSess.CurrentState,
+		Status:         engine.SessionStatus(dbSess.Status),
 		ExpiresAt:      dbSess.ExpiresAt,
 		CreatedAt:      dbSess.CreatedAt,
 		LastActivityAt: dbSess.LastActivityAt,
+		ClosedAt:       dbSess.ClosedAt,
 	}, nil
 }
 
@@ -126,10 +132,10 @@ func (r *PostgresSessionRepository) create(ctx context.Context, session engine.S
 	query := `
 		INSERT INTO sessions (
 			id, tenant_id, channel_id, sender_id, context,
-			history, current_state, expires_at, created_at, last_activity_at
+			history, current_state, status, expires_at, created_at, last_activity_at, closed_at
 		) VALUES (
 			:id, :tenant_id, :channel_id, :sender_id, :context,
-			:history, :current_state, :expires_at, :created_at, :last_activity_at
+			:history, :current_state, :status, :expires_at, :created_at, :last_activity_at, :closed_at
 		)`
 
 	_, err = r.db.NamedExecContext(ctx, query, dbSess)
@@ -154,8 +160,10 @@ func (r *PostgresSessionRepository) update(ctx context.Context, session engine.S
 			context = :context,
 			history = :history,
 			current_state = :current_state,
+			status = :status,
 			expires_at = :expires_at,
-			last_activity_at = :last_activity_at
+			last_activity_at = :last_activity_at,
+			closed_at = :closed_at
 		WHERE id = :id`
 
 	result, err := r.db.NamedExecContext(ctx, query, dbSess)
@@ -180,7 +188,7 @@ func (r *PostgresSessionRepository) FindByID(ctx context.Context, id kernel.Sess
 	query := `
 		SELECT 
 			id, tenant_id, channel_id, sender_id, context,
-			history, current_state, expires_at, created_at, last_activity_at
+			history, current_state, status, expires_at, created_at, last_activity_at, closed_at
 		FROM sessions
 		WHERE id = $1`
 
@@ -222,9 +230,11 @@ func (r *PostgresSessionRepository) FindByChannelAndSender(ctx context.Context, 
 	query := `
 		SELECT 
 			id, tenant_id, channel_id, sender_id, context,
-			history, current_state, expires_at, created_at, last_activity_at
+			history, current_state, status, expires_at, created_at, last_activity_at, closed_at
 		FROM sessions
-		WHERE channel_id = $1 AND sender_id = $2`
+		WHERE channel_id = $1 AND sender_id = $2
+		ORDER BY created_at DESC
+		LIMIT 1`
 
 	var dbSess dbSession
 	err := r.db.GetContext(ctx, &dbSess, query, channelID.String(), senderID)
@@ -242,11 +252,36 @@ func (r *PostgresSessionRepository) FindByChannelAndSender(ctx context.Context, 
 	return toDomainSession(&dbSess)
 }
 
+func (r *PostgresSessionRepository) FindActiveByChannelAndSender(ctx context.Context, channelID kernel.ChannelID, senderID string) (*engine.Session, error) {
+	query := `
+		SELECT 
+			id, tenant_id, channel_id, sender_id, context,
+			history, current_state, status, expires_at, created_at, last_activity_at, closed_at
+		FROM sessions
+		WHERE channel_id = $1 AND sender_id = $2 AND status = 'ACTIVE'
+		LIMIT 1`
+
+	var dbSess dbSession
+	err := r.db.GetContext(ctx, &dbSess, query, channelID.String(), senderID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, engine.ErrSessionNotFound().
+				WithDetail("channel_id", channelID.String()).
+				WithDetail("sender_id", senderID)
+		}
+		return nil, errx.Wrap(err, "failed to find active session by channel and sender", errx.TypeInternal).
+			WithDetail("channel_id", channelID.String()).
+			WithDetail("sender_id", senderID)
+	}
+
+	return toDomainSession(&dbSess)
+}
+
 func (r *PostgresSessionRepository) FindByChannel(ctx context.Context, channelID kernel.ChannelID) ([]*engine.Session, error) {
 	query := `
 		SELECT 
 			id, tenant_id, channel_id, sender_id, context,
-			history, current_state, expires_at, created_at, last_activity_at
+			history, current_state, status, expires_at, created_at, last_activity_at, closed_at
 		FROM sessions
 		WHERE channel_id = $1
 		ORDER BY last_activity_at DESC`
@@ -274,9 +309,9 @@ func (r *PostgresSessionRepository) FindActive(ctx context.Context, tenantID ker
 	query := `
 		SELECT 
 			id, tenant_id, channel_id, sender_id, context,
-			history, current_state, expires_at, created_at, last_activity_at
+			history, current_state, status, expires_at, created_at, last_activity_at, closed_at
 		FROM sessions
-		WHERE tenant_id = $1 AND expires_at > NOW()
+		WHERE tenant_id = $1 AND status = 'ACTIVE'
 		ORDER BY last_activity_at DESC`
 
 	var dbSessions []dbSession
@@ -302,9 +337,9 @@ func (r *PostgresSessionRepository) FindExpired(ctx context.Context) ([]*engine.
 	query := `
 		SELECT 
 			id, tenant_id, channel_id, sender_id, context,
-			history, current_state, expires_at, created_at, last_activity_at
+			history, current_state, status, expires_at, created_at, last_activity_at, closed_at
 		FROM sessions
-		WHERE expires_at <= NOW()
+		WHERE status = 'ACTIVE' AND expires_at <= NOW()
 		ORDER BY expires_at ASC`
 
 	var dbSessions []dbSession
@@ -347,9 +382,9 @@ func (r *PostgresSessionRepository) List(ctx context.Context, req engine.Session
 	}
 
 	if req.IsActive != nil && *req.IsActive {
-		conditions = append(conditions, "expires_at > NOW()")
+		conditions = append(conditions, "status = 'ACTIVE'")
 	} else if req.IsActive != nil && !*req.IsActive {
-		conditions = append(conditions, "expires_at <= NOW()")
+		conditions = append(conditions, "status IN ('CLOSED', 'EXPIRED')")
 	}
 
 	if req.CurrentState != nil {
@@ -384,7 +419,7 @@ func (r *PostgresSessionRepository) List(ctx context.Context, req engine.Session
 	dataQuery := fmt.Sprintf(`
 		SELECT 
 			id, tenant_id, channel_id, sender_id, context,
-			history, current_state, expires_at, created_at, last_activity_at
+			history, current_state, status, expires_at, created_at, last_activity_at, closed_at
 		FROM sessions
 		WHERE %s
 		ORDER BY last_activity_at DESC
@@ -412,11 +447,14 @@ func (r *PostgresSessionRepository) List(ctx context.Context, req engine.Session
 }
 
 func (r *PostgresSessionRepository) CleanExpired(ctx context.Context) error {
-	query := `DELETE FROM sessions WHERE expires_at <= NOW()`
+	query := `
+		UPDATE sessions 
+		SET status = 'EXPIRED', closed_at = NOW() 
+		WHERE status = 'ACTIVE' AND expires_at <= NOW()`
 
 	result, err := r.db.ExecContext(ctx, query)
 	if err != nil {
-		return errx.Wrap(err, "failed to clean expired sessions", errx.TypeInternal)
+		return errx.Wrap(err, "failed to mark expired sessions", errx.TypeInternal)
 	}
 
 	rowsAffected, err := result.RowsAffected()
@@ -424,7 +462,7 @@ func (r *PostgresSessionRepository) CleanExpired(ctx context.Context) error {
 		return errx.Wrap(err, "failed to get rows affected", errx.TypeInternal)
 	}
 
-	// Log how many sessions were cleaned (optional)
+	// Log how many sessions were marked as expired (optional)
 	_ = rowsAffected
 
 	return nil
@@ -435,7 +473,7 @@ func (r *PostgresSessionRepository) ExtendExpiration(ctx context.Context, id ker
 		UPDATE sessions 
 		SET expires_at = NOW() + ($2 || ' seconds')::INTERVAL,
 		    last_activity_at = NOW()
-		WHERE id = $1`
+		WHERE id = $1 AND status = 'ACTIVE'`
 
 	result, err := r.db.ExecContext(ctx, query, string(id), duration)
 	if err != nil {
@@ -456,7 +494,7 @@ func (r *PostgresSessionRepository) ExtendExpiration(ctx context.Context, id ker
 }
 
 func (r *PostgresSessionRepository) CountActive(ctx context.Context, tenantID kernel.TenantID) (int, error) {
-	query := `SELECT COUNT(*) FROM sessions WHERE tenant_id = $1 AND expires_at > NOW()`
+	query := `SELECT COUNT(*) FROM sessions WHERE tenant_id = $1 AND status = 'ACTIVE'`
 
 	var count int
 	err := r.db.GetContext(ctx, &count, query, tenantID.String())
@@ -466,6 +504,54 @@ func (r *PostgresSessionRepository) CountActive(ctx context.Context, tenantID ke
 	}
 
 	return count, nil
+}
+
+func (r *PostgresSessionRepository) Close(ctx context.Context, id kernel.SessionID) error {
+	query := `
+		UPDATE sessions 
+		SET status = 'CLOSED', closed_at = NOW() 
+		WHERE id = $1 AND status = 'ACTIVE'`
+
+	result, err := r.db.ExecContext(ctx, query, string(id))
+	if err != nil {
+		return errx.Wrap(err, "failed to close session", errx.TypeInternal).
+			WithDetail("session_id", string(id))
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return errx.Wrap(err, "failed to get rows affected", errx.TypeInternal)
+	}
+
+	if rowsAffected == 0 {
+		return engine.ErrSessionNotFound().WithDetail("session_id", string(id))
+	}
+
+	return nil
+}
+
+func (r *PostgresSessionRepository) MarkExpired(ctx context.Context, id kernel.SessionID) error {
+	query := `
+		UPDATE sessions 
+		SET status = 'EXPIRED', closed_at = NOW() 
+		WHERE id = $1 AND status = 'ACTIVE'`
+
+	result, err := r.db.ExecContext(ctx, query, string(id))
+	if err != nil {
+		return errx.Wrap(err, "failed to mark session as expired", errx.TypeInternal).
+			WithDetail("session_id", string(id))
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return errx.Wrap(err, "failed to get rows affected", errx.TypeInternal)
+	}
+
+	if rowsAffected == 0 {
+		return engine.ErrSessionNotFound().WithDetail("session_id", string(id))
+	}
+
+	return nil
 }
 
 func (r *PostgresSessionRepository) sessionExists(ctx context.Context, id string) (bool, error) {

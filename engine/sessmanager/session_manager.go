@@ -49,12 +49,18 @@ func NewSessionManager(repo engine.SessionRepository, config *SessionManagerConf
 
 // GetOrCreate obtains an existing session or creates a new one
 func (m *SessionManager) GetOrCreate(ctx context.Context, channelID kernel.ChannelID, senderID string, tenantID kernel.TenantID) (*engine.Session, error) {
-	// Try to find existing session
-	session, err := m.repo.FindByChannelAndSender(ctx, channelID, senderID)
+	// Try to find existing ACTIVE session
+	session, err := m.repo.FindActiveByChannelAndSender(ctx, channelID, senderID)
 	if err == nil {
-		// Session found - check if expired
+		// Active session found - check if expired
 		if session.IsExpired() {
-			// Session expired, create a new one
+			// Mark as expired and create new one
+			if err := m.repo.MarkExpired(ctx, session.ID); err != nil {
+				// Log error but continue to create new session
+				// This shouldn't block the user from getting a session
+			}
+
+			// Create new session
 			return m.createNewSession(ctx, channelID, senderID, tenantID)
 		}
 
@@ -70,7 +76,7 @@ func (m *SessionManager) GetOrCreate(ctx context.Context, channelID kernel.Chann
 
 	// Check if error is "not found"
 	if errx.IsType(err, errx.TypeNotFound) {
-		// Session doesn't exist, create new one
+		// No active session exists, create new one
 		return m.createNewSession(ctx, channelID, senderID, tenantID)
 	}
 
@@ -90,9 +96,11 @@ func (m *SessionManager) createNewSession(ctx context.Context, channelID kernel.
 		Context:        make(map[string]any),
 		History:        []engine.MessageRef{},
 		CurrentState:   "initial",
+		Status:         engine.SessionStatusActive,
 		ExpiresAt:      now.Add(m.defaultExpirationTime),
 		CreatedAt:      now,
 		LastActivityAt: now,
+		ClosedAt:       nil,
 	}
 
 	if err := m.repo.Save(ctx, *session); err != nil {
@@ -110,6 +118,13 @@ func (m *SessionManager) Update(ctx context.Context, session engine.Session) err
 	if !session.IsValid() {
 		return errx.New("invalid session", errx.TypeValidation).
 			WithDetail("session_id", session.ID)
+	}
+
+	// Check if session is active
+	if session.Status != engine.SessionStatusActive {
+		return errx.New("cannot update non-active session", errx.TypeValidation).
+			WithDetail("session_id", session.ID).
+			WithDetail("status", string(session.Status))
 	}
 
 	// Update activity timestamp
@@ -135,6 +150,13 @@ func (m *SessionManager) UpdateContext(ctx context.Context, sessionID kernel.Ses
 	if err != nil {
 		return errx.Wrap(err, "failed to find session", errx.TypeInternal).
 			WithDetail("session_id", string(sessionID))
+	}
+
+	// Check if session is active
+	if session.Status != engine.SessionStatusActive {
+		return errx.New("cannot update non-active session", errx.TypeValidation).
+			WithDetail("session_id", string(sessionID)).
+			WithDetail("status", string(session.Status))
 	}
 
 	// Check if expired
@@ -164,6 +186,13 @@ func (m *SessionManager) UpdateState(ctx context.Context, sessionID kernel.Sessi
 	if err != nil {
 		return errx.Wrap(err, "failed to find session", errx.TypeInternal).
 			WithDetail("session_id", string(sessionID))
+	}
+
+	// Check if session is active
+	if session.Status != engine.SessionStatusActive {
+		return errx.New("cannot update non-active session", errx.TypeValidation).
+			WithDetail("session_id", string(sessionID)).
+			WithDetail("status", string(session.Status))
 	}
 
 	// Check if expired
@@ -216,6 +245,13 @@ func (m *SessionManager) ExtendSession(ctx context.Context, sessionID kernel.Ses
 			WithDetail("session_id", string(sessionID))
 	}
 
+	// Check if session is active
+	if session.Status != engine.SessionStatusActive {
+		return errx.New("cannot extend non-active session", errx.TypeValidation).
+			WithDetail("session_id", string(sessionID)).
+			WithDetail("status", string(session.Status))
+	}
+
 	// Extend expiration
 	session.ExtendExpiration(m.defaultExpirationTime)
 
@@ -228,7 +264,7 @@ func (m *SessionManager) ExtendSession(ctx context.Context, sessionID kernel.Ses
 	return nil
 }
 
-// CleanExpiredSessions removes all expired sessions
+// CleanExpiredSessions marks all expired sessions as EXPIRED
 func (m *SessionManager) CleanExpiredSessions(ctx context.Context) error {
 	if err := m.repo.CleanExpired(ctx); err != nil {
 		return errx.Wrap(err, "failed to clean expired sessions", errx.TypeInternal)
@@ -244,6 +280,13 @@ func (m *SessionManager) AddMessageToHistory(ctx context.Context, sessionID kern
 	if err != nil {
 		return errx.Wrap(err, "failed to find session", errx.TypeInternal).
 			WithDetail("session_id", string(sessionID))
+	}
+
+	// Check if session is active
+	if session.Status != engine.SessionStatusActive {
+		return errx.New("cannot add message to non-active session", errx.TypeValidation).
+			WithDetail("session_id", string(sessionID)).
+			WithDetail("status", string(session.Status))
 	}
 
 	// Check if expired
@@ -290,6 +333,13 @@ func (m *SessionManager) ClearContext(ctx context.Context, sessionID kernel.Sess
 			WithDetail("session_id", string(sessionID))
 	}
 
+	// Check if session is active
+	if session.Status != engine.SessionStatusActive {
+		return errx.New("cannot clear context of non-active session", errx.TypeValidation).
+			WithDetail("session_id", string(sessionID)).
+			WithDetail("status", string(session.Status))
+	}
+
 	// Clear context
 	session.Context = make(map[string]any)
 	session.UpdateActivity()
@@ -311,13 +361,22 @@ func (m *SessionManager) ResetSession(ctx context.Context, sessionID kernel.Sess
 			WithDetail("session_id", string(sessionID))
 	}
 
+	// Check if session is active
+	if session.Status != engine.SessionStatusActive {
+		return errx.New("cannot reset non-active session", errx.TypeValidation).
+			WithDetail("session_id", string(sessionID)).
+			WithDetail("status", string(session.Status))
+	}
+
 	// Reset session
 	now := time.Now()
 	session.Context = make(map[string]any)
 	session.History = []engine.MessageRef{}
 	session.CurrentState = "initial"
+	session.Status = engine.SessionStatusActive
 	session.ExpiresAt = now.Add(m.defaultExpirationTime)
 	session.LastActivityAt = now
+	session.ClosedAt = nil
 
 	// Save session
 	if err := m.repo.Save(ctx, *session); err != nil {
@@ -350,5 +409,15 @@ func (m *SessionManager) IsSessionActive(ctx context.Context, sessionID kernel.S
 			WithDetail("session_id", string(sessionID))
 	}
 
-	return !session.IsExpired(), nil
+	return session.Status == engine.SessionStatusActive && !session.IsExpired(), nil
+}
+
+// CloseSession manually closes a session
+func (m *SessionManager) CloseSession(ctx context.Context, sessionID kernel.SessionID) error {
+	if err := m.repo.Close(ctx, sessionID); err != nil {
+		return errx.Wrap(err, "failed to close session", errx.TypeInternal).
+			WithDetail("session_id", string(sessionID))
+	}
+
+	return nil
 }

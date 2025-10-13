@@ -4,6 +4,11 @@ import (
 	"encoding/json"
 	"time"
 
+	"maps"
+
+	"github.com/Abraxas-365/craftable/ai/llm"
+	"github.com/Abraxas-365/craftable/ai/providers/aiopenai"
+	"github.com/Abraxas-365/craftable/ptrx"
 	"github.com/Abraxas-365/relay/engine"
 	"github.com/Abraxas-365/relay/pkg/kernel"
 )
@@ -103,13 +108,54 @@ type AIParserConfig struct {
 	Provider       string         `json:"provider"` // openai, anthropic, gemini
 	Model          string         `json:"model"`
 	Prompt         string         `json:"prompt"`
-	Tools          []string       `json:"tools,omitempty"`
-	Temperature    *float64       `json:"temperature,omitempty"`
+	Tools          []string       `json:"tools,omitempty"` // Tool IDs to use (for future implementation)
+	Temperature    *float32       `json:"temperature,omitempty"`
 	MaxTokens      *int           `json:"max_tokens,omitempty"`
 	CacheResults   bool           `json:"cache_results,omitempty"`
 	Timeout        *int           `json:"timeout,omitempty"`
 	FallbackParser *string        `json:"fallback_parser,omitempty"`
 	Metadata       map[string]any `json:"metadata,omitempty"`
+
+	// Agent configuration
+	UseAgent           bool   `json:"use_agent,omitempty"`            // Enable agent mode with memory
+	MaxAutoIterations  *int   `json:"max_auto_iterations,omitempty"`  // Max iterations with "auto" tool choice
+	MaxTotalIterations *int   `json:"max_total_iterations,omitempty"` // Hard limit to prevent infinite loops
+	SystemPrompt       string `json:"system_prompt,omitempty"`        // System prompt for agent (overrides Prompt when in agent mode)
+}
+
+func (aipc AIParserConfig) GetLLMClient() llm.Client {
+	provider := aiopenai.NewOpenAIProvider("")
+	return *llm.NewClient(provider)
+}
+
+func (aipc AIParserConfig) GetLLMOptions() []llm.Option {
+	llmOptions := []llm.Option{
+		llm.WithModel(aipc.Model),
+		llm.WithTemperature(ptrx.Float32ValueOr(aipc.Temperature, 0.7)),
+		llm.WithMaxTokens(ptrx.IntValueOr(aipc.MaxTokens, 512)),
+	}
+	return llmOptions
+}
+
+func (aipc AIParserConfig) GetMaxAutoIterations() int {
+	if aipc.MaxAutoIterations != nil && *aipc.MaxAutoIterations > 0 {
+		return *aipc.MaxAutoIterations
+	}
+	return 3 // Default
+}
+
+func (aipc AIParserConfig) GetMaxTotalIterations() int {
+	if aipc.MaxTotalIterations != nil && *aipc.MaxTotalIterations > 0 {
+		return *aipc.MaxTotalIterations
+	}
+	return 10 // Default
+}
+
+func (aipc AIParserConfig) GetSystemPrompt() string {
+	if aipc.UseAgent && aipc.SystemPrompt != "" {
+		return aipc.SystemPrompt
+	}
+	return aipc.Prompt
 }
 
 func (c AIParserConfig) Validate() error {
@@ -119,8 +165,11 @@ func (c AIParserConfig) Validate() error {
 	if c.Model == "" {
 		return ErrInvalidParserConfig().WithDetail("reason", "model is required")
 	}
-	if c.Prompt == "" {
+	if c.Prompt == "" && !c.UseAgent {
 		return ErrInvalidParserConfig().WithDetail("reason", "prompt is required")
+	}
+	if c.UseAgent && c.SystemPrompt == "" && c.Prompt == "" {
+		return ErrInvalidParserConfig().WithDetail("reason", "system_prompt or prompt is required when use_agent is true")
 	}
 	return nil
 }
@@ -389,9 +438,7 @@ func (pr *ParseResult) MergeContext(newContext map[string]any) {
 	if pr.Context == nil {
 		pr.Context = make(map[string]any)
 	}
-	for k, v := range newContext {
-		pr.Context[k] = v
-	}
+	maps.Copy(pr.Context, newContext)
 }
 
 func (pr *ParseResult) IsHighConfidence() bool {

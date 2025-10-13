@@ -43,6 +43,8 @@ import (
 
 	"github.com/Abraxas-365/relay/tool"
 
+	"github.com/Abraxas-365/relay/pkg/agent"
+	"github.com/Abraxas-365/relay/pkg/agent/agentinfra"
 	"github.com/Abraxas-365/relay/pkg/config"
 
 	"github.com/go-redis/redis/v8"
@@ -94,6 +96,11 @@ type Container struct {
 	AuthMiddleware    *auth.AuthMiddleware
 
 	// =================================================================
+	// AGENT 🤖
+	// =================================================================
+	AgentChatRepo agent.AgentChatRepository
+
+	// =================================================================
 	// CHANNELS
 	// =================================================================
 	ChannelRepo    channels.ChannelRepository
@@ -125,7 +132,7 @@ type Container struct {
 	DelayExecutor     engine.StepExecutor
 
 	// =================================================================
-	// PARSER 🔍
+	// PARSER 📝
 	// =================================================================
 	ParserRepo    parser.ParserRepository
 	ParserManager *parser.ParserManager
@@ -164,11 +171,12 @@ func NewContainer(cfg *config.Config, db *sqlx.DB, redisClient *redis.Client) *C
 	c.initIAMRepositories()
 	c.initIAMServices()
 	c.initAuthServices()
-	c.initLLMComponents()     // LLM first (needed by AI parser)
+	c.initAgentComponents()   // 🤖 Agent components (needed by AI parser)
+	c.initLLMComponents()     // LLM (needed by AI parser)
 	c.initParserComponents()  // Parser before engine
 	c.initToolComponents()    // Tools before engine
-	c.initChannelComponents() // ✅ Channels BEFORE engine
-	c.initEngineComponents()  // ✅ Engine AFTER channels (can use ChannelManager)
+	c.initChannelComponents() // ⚡ Channels BEFORE engine
+	c.initEngineComponents()  // ⚡ Engine AFTER channels (can use ChannelManager)
 
 	log.Println("✅ Dependency container initialized successfully")
 
@@ -285,6 +293,20 @@ func (c *Container) initAuthServices() {
 }
 
 // =================================================================
+// AGENT INITIALIZATION 🤖
+// =================================================================
+
+func (c *Container) initAgentComponents() {
+	log.Println("  🤖 Initializing agent components...")
+
+	// Initialize agent chat repository
+	c.AgentChatRepo = agentinfra.NewPostgresAgentChatRepository(c.DB)
+	log.Println("    ✅ AgentChatRepo initialized")
+
+	log.Println("  ✅ Agent components initialized")
+}
+
+// =================================================================
 // LLM INITIALIZATION 🤖
 // =================================================================
 
@@ -304,11 +326,11 @@ func (c *Container) initLLMComponents() {
 }
 
 // =================================================================
-// PARSER INITIALIZATION 🔍
+// PARSER INITIALIZATION 📝
 // =================================================================
 
 func (c *Container) initParserComponents() {
-	log.Println("  🔍 Initializing parser components...")
+	log.Println("  📝 Initializing parser components...")
 
 	c.ParserRepo = parserinfra.NewPostgresParserRepository(c.DB)
 	log.Println("    ✅ ParserRepo initialized")
@@ -317,13 +339,11 @@ func (c *Container) initParserComponents() {
 	c.RegexParserEngine = parserengines.NewRegexParserEngine()
 	log.Println("    ✅ Regex parser engine initialized")
 
-	// if c.LLMClient != nil {
-	// 	c.AIParserEngine = parserengines.NewAIParserEngine(c.LLMClient)
-	// 	log.Println("    ✅ AI parser engine initialized")
-	// } else {
-	// 	log.Println("    ⚠️  AI parser engine skipped (LLM not available)")
-	// }
-	//
+	// Initialize AI parser engine with AgentChatRepo
+	c.AIParserEngine = parserengines.NewAIParserEngine(c.AgentChatRepo)
+	log.Println("    ✅ AI parser engine initialized with agent support")
+
+	// TODO: Initialize other parser engines
 	// c.RuleParserEngine = parserengines.NewRuleParserEngine()
 	// log.Println("    ✅ Rule parser engine initialized")
 	//
@@ -336,7 +356,7 @@ func (c *Container) initParserComponents() {
 	// Initialize ParserManager
 	c.ParserManager = parser.NewParserManager(c.ParserRepo)
 
-	// Register all parser engines
+	// Register parser engines
 	c.ParserManager.RegisterEngine(parser.ParserTypeRegex, c.RegexParserEngine)
 	log.Println("    ✅ Registered Regex parser engine")
 
@@ -438,7 +458,7 @@ func (c *Container) initEngineComponents() {
 
 	// Initialize workflow executor with ParserManager and all step executors
 	c.WorkflowExecutor = workflowexec.NewDefaultWorkflowExecutor(
-		c.ParserManager, // 🔍 ParserManager is now the first parameter
+		c.ParserManager, // 📝 ParserManager is now the first parameter
 		c.ChannelManager,
 		c.ActionExecutor,
 		c.ConditionExecutor,
@@ -447,13 +467,13 @@ func (c *Container) initEngineComponents() {
 	)
 	log.Println("    ✅ Workflow executor initialized with parser manager")
 
-	// ✅ Initialize message processor WITH ChannelManager (no injection needed!)
+	// ⚡ Initialize message processor WITH ChannelManager (no injection needed!)
 	c.MessageProcessor = msgprocessor.NewMessageProcessor(
 		c.MessageRepo,
 		c.WorkflowRepo,
 		c.SessionManager,
 		c.WorkflowExecutor,
-		c.ChannelManager, // ✅ ChannelManager already exists!
+		c.ChannelManager, // ⚡ ChannelManager already exists!
 	)
 	log.Println("    ✅ Message processor initialized with ChannelManager")
 
@@ -548,6 +568,7 @@ func (c *Container) HealthCheck() map[string]bool {
 	health["message_processor"] = c.MessageProcessor != nil
 	health["channel_manager"] = c.ChannelManager != nil
 	health["whatsapp_adapter"] = c.WhatsAppAdapter != nil
+	health["agent_chat_repo"] = c.AgentChatRepo != nil
 
 	return health
 }
@@ -570,6 +591,7 @@ func (c *Container) GetServiceNames() []string {
 		"MessageProcessor",
 		"ParserManager",
 		"EventBus",
+		"AgentChatRepo",
 	}
 }
 
@@ -584,6 +606,7 @@ func (c *Container) GetRepositoryNames() []string {
 		"EngineSessionRepo",
 		"ParserRepo",
 		"ToolRepo",
+		"AgentChatRepo",
 	}
 }
 

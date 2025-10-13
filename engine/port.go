@@ -77,6 +77,12 @@ type SessionRepository interface {
 
 	// Stats
 	CountActive(ctx context.Context, tenantID kernel.TenantID) (int, error)
+
+	Close(ctx context.Context, id kernel.SessionID) error
+	MarkExpired(ctx context.Context, id kernel.SessionID) error
+
+	// Find only active sessions
+	FindActiveByChannelAndSender(ctx context.Context, channelID kernel.ChannelID, senderID string) (*Session, error)
 }
 
 // ============================================================================

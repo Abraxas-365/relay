@@ -103,18 +103,41 @@ const (
 // Session Entity
 // ============================================================================
 
-// Session representa contexto de conversación
+type SessionStatus string
+
+const (
+	SessionStatusActive  SessionStatus = "ACTIVE"
+	SessionStatusClosed  SessionStatus = "CLOSED"
+	SessionStatusExpired SessionStatus = "EXPIRED"
+)
+
 type Session struct {
-	ID             kernel.SessionID `db:"id" json:"id"`
-	TenantID       kernel.TenantID  `db:"tenant_id" json:"tenant_id"`
-	ChannelID      kernel.ChannelID `db:"channel_id" json:"channel_id"`
-	SenderID       string           `db:"sender_id" json:"sender_id"`
-	Context        map[string]any   `db:"context" json:"context"`
-	History        []MessageRef     `db:"history" json:"history"` // Referencias a mensajes
-	CurrentState   string           `db:"current_state" json:"current_state"`
-	ExpiresAt      time.Time        `db:"expires_at" json:"expires_at"`
-	CreatedAt      time.Time        `db:"created_at" json:"created_at"`
-	LastActivityAt time.Time        `db:"last_activity_at" json:"last_activity_at"`
+	ID             kernel.SessionID
+	TenantID       kernel.TenantID
+	ChannelID      kernel.ChannelID
+	SenderID       string
+	Context        map[string]any
+	History        []MessageRef
+	CurrentState   string
+	Status         SessionStatus
+	ExpiresAt      time.Time
+	CreatedAt      time.Time
+	LastActivityAt time.Time
+	ClosedAt       *time.Time
+}
+
+// Close marks the session as closed
+func (s *Session) Close() {
+	s.Status = SessionStatusClosed
+	now := time.Now()
+	s.ClosedAt = &now
+}
+
+// MarkExpired marks the session as expired
+func (s *Session) MarkExpired() {
+	s.Status = SessionStatusExpired
+	now := time.Now()
+	s.ClosedAt = &now
 }
 
 // MessageRef referencia a un mensaje en el historial
