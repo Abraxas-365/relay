@@ -71,10 +71,9 @@ func (e *DefaultWorkflowExecutor) Execute(
 
 	startTime := time.Now()
 	result := &engine.ExecutionResult{
-		Success:       true,
-		ShouldRespond: false,
-		Context:       make(map[string]any),
-		Executedodes:  []engine.NodeResult{},
+		Success:      true,
+		Context:      make(map[string]any),
+		Executedodes: []engine.NodeResult{},
 	}
 
 	if err := e.ValidateWorkflow(ctx, workflow); err != nil {
@@ -193,13 +192,6 @@ func (e *DefaultWorkflowExecutor) Execute(
 		// END OF MODIFICATION
 		// ========================================================================
 
-		if responseText, ok := nodeResult.Output["response"].(string); ok && responseText != "" {
-			result.Response = responseText
-			result.ShouldRespond = true
-		}
-		if shouldRespond, ok := nodeResult.Output["should_respond"].(bool); ok {
-			result.ShouldRespond = shouldRespond
-		}
 		if nextState, ok := nodeResult.Output["next_state"].(string); ok && nextState != "" {
 			result.NextState = nextState
 		}
@@ -372,13 +364,6 @@ func (e *DefaultWorkflowExecutor) executeParserNode(
 		}
 	}
 
-	// Auto-respond if configured and parser has response
-	autoRespond, _ := node.Config["auto_respond"].(bool)
-	if autoRespond && parseResult.ShouldRespond && parseResult.Response != "" {
-		nodeResult.Output["response"] = parseResult.Response
-		nodeResult.Output["should_respond"] = true
-	}
-
 	// Check success based on parser result and optional min_confidence
 	if !parseResult.Success {
 		return parser.ErrParsingFailed().
@@ -414,12 +399,6 @@ func (e *DefaultWorkflowExecutor) executeParserActions(
 
 	for i, action := range parseResult.Actions {
 		switch action.Type {
-		case parser.ActionTypeResponse:
-			if message, ok := action.Config["message"].(string); ok {
-				workflowResult.Response = message
-				workflowResult.ShouldRespond = true
-				executed = append(executed, string(action.Type))
-			}
 
 		case parser.ActionTypeSetContext:
 			if key, ok := action.Config["key"].(string); ok {
@@ -782,10 +761,9 @@ func (e *DefaultWorkflowExecutor) ResumeFromNode(
 
 	startTime := time.Now()
 	result := &engine.ExecutionResult{
-		Success:       true,
-		ShouldRespond: false,
-		Context:       make(map[string]any),
-		Executedodes:  []engine.NodeResult{},
+		Success:      true,
+		Context:      make(map[string]any),
+		Executedodes: []engine.NodeResult{},
 	}
 
 	// Validate workflow
@@ -925,10 +903,6 @@ func (e *DefaultWorkflowExecutor) ResumeFromNode(
 		// Handle response
 		if responseText, ok := nodeResult.Output["response"].(string); ok && responseText != "" {
 			result.Response = responseText
-			result.ShouldRespond = true
-		}
-		if shouldRespond, ok := nodeResult.Output["should_respond"].(bool); ok {
-			result.ShouldRespond = shouldRespond
 		}
 		if nextState, ok := nodeResult.Output["next_state"].(string); ok && nextState != "" {
 			result.NextState = nextState

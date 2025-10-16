@@ -108,6 +108,13 @@ const (
 	NodeTypeAction    NodeType = "ACTION"
 	NodeTypeDelay     NodeType = "DELAY"
 	NodeTypeResponse  NodeType = "RESPONSE"
+
+	NodeTypeSwitch    NodeType = "SWITCH"
+	NodeTypeTransform NodeType = "TRANSFORM"
+	NodeTypeHTTP      NodeType = "HTTP"
+	NodeTypeLoop      NodeType = "LOOP"
+	NodeTypeValidate  NodeType = "VALIDATE"
+	NodeTypeAIAgent   NodeType = "AI_AGENT"
 )
 
 // ============================================================================
@@ -164,14 +171,13 @@ type MessageRef struct {
 
 // ExecutionResult resultado de la ejecución de un workflow
 type ExecutionResult struct {
-	Success       bool           `json:"success"`
-	Response      string         `json:"response,omitempty"`
-	ShouldRespond bool           `json:"should_respond"`
-	NextState     string         `json:"next_state,omitempty"`
-	Context       map[string]any `json:"context,omitempty"`
-	Error         error          `json:"-"`
-	ErrorMessage  string         `json:"error,omitempty"`
-	Executedodes  []NodeResult   `json:"executed_nodes,omitempty"`
+	Success      bool           `json:"success"`
+	Response     string         `json:"response,omitempty"`
+	NextState    string         `json:"next_state,omitempty"`
+	Context      map[string]any `json:"context,omitempty"`
+	Error        error          `json:"-"`
+	ErrorMessage string         `json:"error,omitempty"`
+	Executedodes []NodeResult   `json:"executed_nodes,omitempty"`
 }
 
 // NodeResult resultado de un paso

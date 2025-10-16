@@ -96,14 +96,7 @@ func (mp *MessageProcessor) ProcessMessage(ctx context.Context, msg engine.Messa
 		// logger.Error("Failed to update session", err)
 	}
 
-	// // 9. Enviar respuesta si es necesario
-	if result.ShouldRespond && result.Response != "" {
-		if err := mp.sendResponse(ctx, msg, result.Response); err != nil {
-			log.Printf("❌ Failed to send response: %v", err)
-		}
-	}
-
-	// 10. Marcar mensaje como procesado
+	// 9. Marcar mensaje como procesado
 	msg.MarkAsProcessed()
 	return mp.messageRepo.Save(ctx, msg)
 }
@@ -163,14 +156,7 @@ func (mp *MessageProcessor) ProcessWithWorkflow(ctx context.Context, msg engine.
 		// Log error pero continuar
 	}
 
-	// 10. Enviar respuesta
-	if result.ShouldRespond && result.Response != "" {
-		if err := mp.sendResponse(ctx, msg, result.Response); err != nil {
-			// Log error pero continuar
-		}
-	}
-
-	// 11. Marcar como procesado
+	// 10. Marcar como procesado
 	msg.MarkAsProcessed()
 	return mp.messageRepo.Save(ctx, msg)
 }

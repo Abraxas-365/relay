@@ -598,33 +598,6 @@ func (c *Container) handleWorkflowContinuation(
 	}
 
 	// Send response if needed
-	if result.ShouldRespond && result.Response != "" {
-		outgoingMsg := channels.OutgoingMessage{
-			RecipientID: message.SenderID,
-			Content: channels.MessageContent{
-				Type: "text",
-				Text: result.Response,
-			},
-			Metadata: map[string]any{
-				"workflow_id":        continuation.WorkflowID,
-				"continuation_id":    continuation.ID,
-				"delayed_from_step":  continuation.NodeID,
-				"workflow_triggered": true,
-				"timestamp":          time.Now().Unix(),
-			},
-		}
-
-		if err := c.ChannelManager.SendMessage(
-			ctx,
-			message.TenantID,
-			message.ChannelID,
-			outgoingMsg,
-		); err != nil {
-			log.Printf("⚠️  Failed to send response: %v", err)
-		} else {
-			log.Printf("✅ Response sent successfully to %s", message.SenderID)
-		}
-	}
 
 	return nil
 }
