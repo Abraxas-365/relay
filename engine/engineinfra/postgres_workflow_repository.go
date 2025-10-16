@@ -46,8 +46,8 @@ func toDBWorkflow(wf engine.Workflow) (*dbWorkflow, error) {
 	}
 
 	stepsJSON := []byte("[]")
-	if wf.Steps != nil && len(wf.Steps) > 0 {
-		stepsJSON, err = json.Marshal(wf.Steps)
+	if wf.Node != nil && len(wf.Node) > 0 {
+		stepsJSON, err = json.Marshal(wf.Node)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal steps: %w", err)
 		}
@@ -73,7 +73,7 @@ func toDomainWorkflow(dbWf *dbWorkflow) (*engine.Workflow, error) {
 		return nil, fmt.Errorf("failed to unmarshal trigger: %w", err)
 	}
 
-	var steps []engine.WorkflowStep
+	var steps []engine.WorkflowNode
 	if len(dbWf.Steps) > 0 && string(dbWf.Steps) != "null" {
 		if err := json.Unmarshal(dbWf.Steps, &steps); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal steps: %w", err)
@@ -86,7 +86,7 @@ func toDomainWorkflow(dbWf *dbWorkflow) (*engine.Workflow, error) {
 		Name:        dbWf.Name,
 		Description: dbWf.Description,
 		Trigger:     trigger,
-		Steps:       steps,
+		Node:        steps,
 		IsActive:    dbWf.IsActive,
 	}
 

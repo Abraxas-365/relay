@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/Abraxas-365/craftable/errx"
@@ -14,50 +15,52 @@ import (
 )
 
 type DefaultWorkflowExecutor struct {
-	stepExecutors  map[engine.StepType]engine.StepExecutor
-	parserManager  *parser.ParserManager
-	channelManager channels.ChannelManager // ✅ ADD THIS
+	nodeExecutors       map[engine.NodeType]engine.NodeExecutor
+	parserManager       *parser.ParserManager
+	channelManager      channels.ChannelManager
+	expressionEvaluator engine.ExpressionEvaluator
 }
 
 var _ engine.WorkflowExecutor = (*DefaultWorkflowExecutor)(nil)
 
+// MODIFIED: Added expressionEvaluator
 func NewDefaultWorkflowExecutor(
 	parserManager *parser.ParserManager,
 	channelManager channels.ChannelManager,
-	stepExecutors ...engine.StepExecutor,
+	expressionEvaluator engine.ExpressionEvaluator,
+	nodeExecutors ...engine.NodeExecutor,
 ) *DefaultWorkflowExecutor {
 	executor := &DefaultWorkflowExecutor{
-		stepExecutors:  make(map[engine.StepType]engine.StepExecutor),
-		parserManager:  parserManager,
-		channelManager: channelManager,
+		nodeExecutors:       make(map[engine.NodeType]engine.NodeExecutor),
+		parserManager:       parserManager,
+		channelManager:      channelManager,
+		expressionEvaluator: expressionEvaluator,
 	}
 
-	for _, stepExec := range stepExecutors {
-		executor.RegisterStepExecutor(stepExec)
+	for _, nodeExec := range nodeExecutors {
+		executor.RegisterNodeExecutor(nodeExec)
 	}
 
 	return executor
 }
 
-// RegisterStepExecutor registra un ejecutor de paso
-func (e *DefaultWorkflowExecutor) RegisterStepExecutor(executor engine.StepExecutor) {
-	// Registrar para todos los tipos que soporte
-	for _, stepType := range []engine.StepType{
-		engine.StepTypeCondition,
-		engine.StepTypeParser,
-		engine.StepTypeTool,
-		engine.StepTypeAction,
-		engine.StepTypeDelay,
-		engine.StepTypeResponse,
+// RegisterNodeExecutor registers a node executor
+func (e *DefaultWorkflowExecutor) RegisterNodeExecutor(executor engine.NodeExecutor) {
+	for _, nodeType := range []engine.NodeType{
+		engine.NodeTypeCondition,
+		engine.NodeTypeParser,
+		engine.NodeTypeAction,
+		engine.NodeTypeDelay,
+		engine.NodeTypeResponse,
 	} {
-		if executor.SupportsType(stepType) {
-			e.stepExecutors[stepType] = executor
-			log.Printf("✓ Registered executor for step type: %s", stepType)
+		if executor.SupportsType(nodeType) {
+			e.nodeExecutors[nodeType] = executor
+			log.Printf("✓ Registered executor for node type: %s", nodeType)
 		}
 	}
 }
 
-// Execute ejecuta un workflow completo
+// Execute runs a full workflow.
 func (e *DefaultWorkflowExecutor) Execute(
 	ctx context.Context,
 	workflow engine.Workflow,
@@ -71,105 +74,143 @@ func (e *DefaultWorkflowExecutor) Execute(
 		Success:       true,
 		ShouldRespond: false,
 		Context:       make(map[string]any),
-		ExecutedSteps: []engine.StepResult{},
+		Executedodes:  []engine.NodeResult{},
 	}
 
-	// Validar workflow
 	if err := e.ValidateWorkflow(ctx, workflow); err != nil {
 		return nil, errx.Wrap(err, "workflow validation failed", errx.TypeValidation)
 	}
 
-	// Preparar contexto inicial
-	stepContext := e.prepareInitialContext(message, session)
+	nodeContext := e.prepareInitialContext(message, session)
 
-	// Ejecutar pasos secuencialmente
-	currentStepID := ""
-	if len(workflow.Steps) > 0 {
-		currentStepID = workflow.Steps[0].ID
+	currentNodeID := ""
+	if len(workflow.Node) > 0 {
+		currentNodeID = workflow.Node[0].ID
 	}
 
-	visitedSteps := make(map[string]bool)
-	maxSteps := len(workflow.Steps) * 2 // Prevenir ciclos infinitos
+	visitedNodes := make(map[string]bool)
+	maxNodes := len(workflow.Node) * 2 // Prevent infinite loops
 
-	for currentStepID != "" && len(result.ExecutedSteps) < maxSteps {
-		// Prevenir ciclos
-		if visitedSteps[currentStepID] {
+	for currentNodeID != "" && len(result.Executedodes) < maxNodes {
+		if visitedNodes[currentNodeID] {
 			return nil, engine.ErrCyclicWorkflow().
-				WithDetail("step_id", currentStepID).
+				WithDetail("node_id", currentNodeID).
 				WithDetail("workflow_id", workflow.ID.String())
 		}
-		visitedSteps[currentStepID] = true
+		visitedNodes[currentNodeID] = true
 
-		// Buscar el paso actual
-		step := workflow.GetStepByID(currentStepID)
-		if step == nil {
-			return nil, engine.ErrStepNotFound().WithDetail("step_id", currentStepID)
+		node := workflow.GetNodeByID(currentNodeID)
+		if node == nil {
+			return nil, engine.ErrNodeNotFound().WithDetail("node_id", currentNodeID)
 		}
 
-		// Ejecutar paso
-		stepResult, err := e.executeStepInternal(ctx, *step, message, session, stepContext, result)
+		configToEvaluate := make(map[string]any)
+		for k, v := range node.Config {
+			configToEvaluate[k] = v
+		}
+
+		evaluatedData, err := e.expressionEvaluator.Evaluate(ctx, configToEvaluate, nodeContext)
 		if err != nil {
-			if stepResult == nil {
-				stepResult = &engine.StepResult{
-					StepID:    step.ID,
-					StepName:  step.Name,
-					Success:   false,
-					Error:     err.Error(),
-					Timestamp: time.Now(),
+			nodeResult := &engine.NodeResult{
+				NodeID:    node.ID,
+				NodeName:  node.Name,
+				Success:   false,
+				Error:     fmt.Sprintf("expression evaluation failed: %v", err),
+				Timestamp: time.Now(),
+			}
+			result.Executedodes = append(result.Executedodes, *nodeResult)
+			result.Success = false
+			result.ErrorMessage = nodeResult.Error
+			break // Stop workflow execution
+		}
+
+		evaluatedConfig, ok := evaluatedData.(map[string]any)
+		if !ok {
+			nodeResult := &engine.NodeResult{
+				NodeID:    node.ID,
+				NodeName:  node.Name,
+				Success:   false,
+				Error:     "expression evaluation did not return a valid configuration map",
+				Timestamp: time.Now(),
+			}
+			result.Executedodes = append(result.Executedodes, *nodeResult)
+			result.Success = false
+			result.ErrorMessage = nodeResult.Error
+			break // Stop workflow execution
+		}
+
+		nodeForExecution := *node
+		nodeForExecution.Config = evaluatedConfig
+		// ========================================================================
+		// END OF MODIFICATION
+		// ========================================================================
+
+		// Execute node with the *evaluated* config
+		nodeResult, err := e.executeNodeInternal(ctx, nodeForExecution, message, session, nodeContext, result)
+		if err != nil {
+			if nodeResult == nil {
+				nodeResult = &engine.NodeResult{
+					NodeID: node.ID, NodeName: node.Name, Success: false,
+					Error: err.Error(), Timestamp: time.Now(),
 				}
-			} else {
-				stepResult.Success = false
-				stepResult.Error = err.Error()
+			} else if nodeResult.Error == "" {
+				nodeResult.Success = false
+				nodeResult.Error = err.Error()
 			}
 		}
 
-		result.ExecutedSteps = append(result.ExecutedSteps, *stepResult)
+		result.Executedodes = append(result.Executedodes, *nodeResult)
 
-		// Si el paso falló
-		if !stepResult.Success {
+		if !nodeResult.Success {
 			result.Success = false
-			result.Error = fmt.Errorf("step %s failed: %s", step.Name, stepResult.Error)
-			result.ErrorMessage = stepResult.Error
-
-			// Ir al paso de fallo si existe
-			if step.OnFailure != "" {
-				currentStepID = step.OnFailure
+			result.Error = fmt.Errorf("node %s failed: %s", node.Name, nodeResult.Error)
+			result.ErrorMessage = nodeResult.Error
+			if node.OnFailure != "" {
+				currentNodeID = node.OnFailure
 				continue
 			}
 			break
 		}
 
-		// Actualizar contexto con el output del paso
-		if stepResult.Output != nil {
-			for key, value := range stepResult.Output {
-				stepContext[key] = value
+		// ========================================================================
+		// MODIFIED: STRUCTURED CONTEXT FOR DATA PIPELINING
+		// ========================================================================
+		if nodeResult.Output != nil {
+			// Store the node's output in a structured way under its ID.
+			// This allows expressions like {{node_1.output.userId}}.
+			nodeContext[node.ID] = map[string]any{
+				"output":      nodeResult.Output,
+				"success":     nodeResult.Success,
+				"duration_ms": nodeResult.Duration,
+			}
+
+			// Also merge into the top-level final result for convenience.
+			for key, value := range nodeResult.Output {
 				result.Context[key] = value
 			}
 		}
+		// ========================================================================
+		// END OF MODIFICATION
+		// ========================================================================
 
-		// Manejar respuestas
-		if responseText, ok := stepResult.Output["response"].(string); ok && responseText != "" {
+		if responseText, ok := nodeResult.Output["response"].(string); ok && responseText != "" {
 			result.Response = responseText
 			result.ShouldRespond = true
 		}
-		if shouldRespond, ok := stepResult.Output["should_respond"].(bool); ok {
+		if shouldRespond, ok := nodeResult.Output["should_respond"].(bool); ok {
 			result.ShouldRespond = shouldRespond
 		}
-
-		// Manejar next_state
-		if nextState, ok := stepResult.Output["next_state"].(string); ok && nextState != "" {
+		if nextState, ok := nodeResult.Output["next_state"].(string); ok && nextState != "" {
 			result.NextState = nextState
 		}
 
-		// Siguiente paso (puede ser sobreescrito por acciones de parser)
-		if nextStepOverride, ok := stepContext["__next_step"].(string); ok {
-			currentStepID = nextStepOverride
-			delete(stepContext, "__next_step") // Limpiar override
-		} else if step.OnSuccess != "" {
-			currentStepID = step.OnSuccess
+		if nextNodeOverride, ok := nodeContext["__next_node"].(string); ok {
+			currentNodeID = nextNodeOverride
+			delete(nodeContext, "__next_node")
+		} else if node.OnSuccess != "" {
+			currentNodeID = node.OnSuccess
 		} else {
-			// No hay siguiente paso, terminar
-			currentStepID = ""
+			currentNodeID = ""
 		}
 	}
 
@@ -179,29 +220,29 @@ func (e *DefaultWorkflowExecutor) Execute(
 	return result, nil
 }
 
-// executeStepInternal ejecuta un paso con integración completa
-func (e *DefaultWorkflowExecutor) executeStepInternal(
+// executeNodeInternal executes a single node with full integration
+func (e *DefaultWorkflowExecutor) executeNodeInternal(
 	ctx context.Context,
-	step engine.WorkflowStep,
+	node engine.WorkflowNode,
 	message engine.Message,
 	session *engine.Session,
-	stepContext map[string]any,
+	nodeContext map[string]any,
 	workflowResult *engine.ExecutionResult,
-) (*engine.StepResult, error) {
-	log.Printf("⚡ Executing step: %s (type: %s)", step.Name, step.Type)
+) (*engine.NodeResult, error) {
+	log.Printf("⚡ Executing node: %s (type: %s)", node.Name, node.Type)
 	startTime := time.Now()
 
 	// Apply timeout if configured
-	if step.Timeout != nil && *step.Timeout > 0 {
+	if node.Timeout != nil && *node.Timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(*step.Timeout)*time.Second)
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(*node.Timeout)*time.Second)
 		defer cancel()
 	}
 
 	// Create result base
-	stepResult := &engine.StepResult{
-		StepID:    step.ID,
-		StepName:  step.Name,
+	nodeResult := &engine.NodeResult{
+		NodeID:    node.ID,
+		NodeName:  node.Name,
 		Success:   true,
 		Output:    make(map[string]any),
 		Timestamp: startTime,
@@ -209,65 +250,76 @@ func (e *DefaultWorkflowExecutor) executeStepInternal(
 
 	var err error
 
-	// Execute according to step type
-	switch step.Type {
-	case engine.StepTypeParser:
-		err = e.executeParserStep(ctx, step, message, session, stepResult, workflowResult, stepContext)
-	case engine.StepTypeCondition:
-		err = e.executeConditionStep(ctx, step, message, session, stepResult, stepContext)
-	case engine.StepTypeTool:
-		err = e.executeToolStep(ctx, step, message, session, stepResult, workflowResult, stepContext)
-	case engine.StepTypeDelay:
-		err = e.executeDelayStep(ctx, step, stepResult)
+	// Execute according to node type
+	switch node.Type {
+	case engine.NodeTypeParser:
+		err = e.executeParserNode(ctx, node, message, session, nodeResult, workflowResult, nodeContext)
+	case engine.NodeTypeCondition:
+		err = e.executeConditionNode(ctx, node, message, session, nodeResult, nodeContext)
+	case engine.NodeTypeDelay:
+		err = e.executeDelayNode(ctx, node, nodeResult)
 
 	default:
 		// Try with registered executors (THIS WILL NOW HANDLE RESPONSE TYPE)
-		if executor, ok := e.stepExecutors[step.Type]; ok {
-			input := e.prepareStepInput(message, session, stepContext)
-			stepResult, err = executor.Execute(ctx, step, input)
+		if executor, ok := e.nodeExecutors[node.Type]; ok {
+			input := e.prepareNodeInput(message, session, nodeContext)
+			// The original nodeResult is passed here, so the executor can populate it.
+			var execErr error
+			nodeResult, execErr = executor.Execute(ctx, node, input)
+			if execErr != nil {
+				err = execErr
+			}
 
-			// Merge step result output into workflow context
-			if err == nil && stepResult.Output != nil {
-				for key, value := range stepResult.Output {
+			// Ensure essential fields are set if the executor didn't set them
+			if nodeResult.NodeID == "" {
+				nodeResult.NodeID = node.ID
+			}
+			if nodeResult.NodeName == "" {
+				nodeResult.NodeName = node.Name
+			}
+
+			// Merge node result output into workflow context
+			if err == nil && nodeResult.Output != nil {
+				for key, value := range nodeResult.Output {
 					workflowResult.Context[key] = value
-					stepContext[key] = value
+					// nodeContext is updated in the main loop after this function returns
 				}
 			}
 		} else {
-			err = engine.ErrInvalidWorkflowStep().
-				WithDetail("step_type", string(step.Type)).
-				WithDetail("reason", "no executor found for step type")
+			err = engine.ErrInvalidWorkflowNode().
+				WithDetail("node_type", string(node.Type)).
+				WithDetail("reason", "no executor found for node type")
 		}
 	}
 
-	stepResult.Duration = time.Since(startTime).Milliseconds()
+	nodeResult.Duration = time.Since(startTime).Milliseconds()
 
 	if err != nil {
-		stepResult.Success = false
-		stepResult.Error = err.Error()
-		return stepResult, err
+		nodeResult.Success = false
+		nodeResult.Error = err.Error()
+		return nodeResult, err
 	}
 
-	return stepResult, nil
+	return nodeResult, nil
 }
 
 // ============================================================================
-// Parser Step Execution
+// Parser Node Execution
 // ============================================================================
 
-func (e *DefaultWorkflowExecutor) executeParserStep(
+func (e *DefaultWorkflowExecutor) executeParserNode(
 	ctx context.Context,
-	step engine.WorkflowStep,
+	node engine.WorkflowNode,
 	msg engine.Message,
 	session *engine.Session,
-	stepResult *engine.StepResult,
+	nodeResult *engine.NodeResult,
 	workflowResult *engine.ExecutionResult,
-	stepContext map[string]any,
+	nodeContext map[string]any,
 ) error {
 	// Get parser ID from config
-	parserIDStr, ok := step.Config["parser_id"].(string)
+	parserIDStr, ok := node.Config["parser_id"].(string)
 	if !ok {
-		return parser.ErrParserIDNotFound().WithDetail("step_id", step.ID)
+		return parser.ErrParserIDNotFound().WithDetail("node_id", node.ID)
 	}
 
 	parserID := kernel.ParserID(parserIDStr)
@@ -279,52 +331,52 @@ func (e *DefaultWorkflowExecutor) executeParserStep(
 		msg.TenantID,
 		msg,
 		session,
-		step.Config,
+		node.Config,
 	)
 	if err != nil {
-		return parser.ErrStepExecutionFailed().
-			WithDetail("step_id", step.ID).
+		return parser.ErrNodeExecutionFailed().
+			WithDetail("node_id", node.ID).
 			WithDetail("parser_id", parserIDStr).
 			WithCause(err)
 	}
 
-	// Store parse result in step output
-	stepResult.Output["parse_result"] = parseResult
-	stepResult.Output["confidence"] = parseResult.Confidence
-	stepResult.Output["extracted_data"] = parseResult.ExtractedData
-	stepResult.Output["parser_success"] = parseResult.Success
+	// Store parse result in node output
+	nodeResult.Output["parse_result"] = parseResult
+	nodeResult.Output["confidence"] = parseResult.Confidence
+	nodeResult.Output["extracted_data"] = parseResult.ExtractedData
+	nodeResult.Output["parser_success"] = parseResult.Success
 
 	// Merge parser context into workflow context
 	if parseResult.Context != nil {
 		for k, v := range parseResult.Context {
 			workflowResult.Context[k] = v
-			stepContext[k] = v
+			nodeContext[k] = v
 		}
 	}
 
-	// Merge extracted data into step context
+	// Merge extracted data into node context
 	if parseResult.ExtractedData != nil {
 		for k, v := range parseResult.ExtractedData {
-			stepContext[fmt.Sprintf("extracted_%s", k)] = v
+			nodeContext[fmt.Sprintf("extracted_%s", k)] = v
 		}
 	}
 
 	// Handle parser actions
 	if parseResult.HasActions() {
-		actionsExecuted, err := e.executeParserActions(ctx, parseResult, msg, session, workflowResult, stepContext)
-		stepResult.Output["actions_executed"] = actionsExecuted
+		actionsExecuted, err := e.executeParserActions(ctx, parseResult, msg, session, workflowResult, nodeContext)
+		nodeResult.Output["actions_executed"] = actionsExecuted
 		if err != nil {
 			return parser.ErrActionExecutionFailed().
-				WithDetail("step_id", step.ID).
+				WithDetail("node_id", node.ID).
 				WithCause(err)
 		}
 	}
 
 	// Auto-respond if configured and parser has response
-	autoRespond, _ := step.Config["auto_respond"].(bool)
+	autoRespond, _ := node.Config["auto_respond"].(bool)
 	if autoRespond && parseResult.ShouldRespond && parseResult.Response != "" {
-		stepResult.Output["response"] = parseResult.Response
-		stepResult.Output["should_respond"] = true
+		nodeResult.Output["response"] = parseResult.Response
+		nodeResult.Output["should_respond"] = true
 	}
 
 	// Check success based on parser result and optional min_confidence
@@ -335,7 +387,7 @@ func (e *DefaultWorkflowExecutor) executeParserStep(
 	}
 
 	// Check min confidence if specified
-	if minConf, ok := step.Config["min_confidence"].(float64); ok {
+	if minConf, ok := node.Config["min_confidence"].(float64); ok {
 		if parseResult.Confidence < minConf {
 			return parser.ErrLowConfidence().
 				WithDetail("confidence", fmt.Sprintf("%.2f", parseResult.Confidence)).
@@ -356,7 +408,7 @@ func (e *DefaultWorkflowExecutor) executeParserActions(
 	msg engine.Message,
 	session *engine.Session,
 	workflowResult *engine.ExecutionResult,
-	stepContext map[string]any,
+	nodeContext map[string]any,
 ) ([]string, error) {
 	executed := []string{}
 
@@ -369,19 +421,11 @@ func (e *DefaultWorkflowExecutor) executeParserActions(
 				executed = append(executed, string(action.Type))
 			}
 
-		case parser.ActionTypeTool:
-			if err := e.executeToolAction(ctx, action, msg, session, workflowResult, stepContext); err != nil {
-				return executed, parser.ErrToolExecutionFailed().
-					WithDetail("action_index", fmt.Sprintf("%d", i)).
-					WithCause(err)
-			}
-			executed = append(executed, string(action.Type))
-
 		case parser.ActionTypeSetContext:
 			if key, ok := action.Config["key"].(string); ok {
 				if value, ok := action.Config["value"]; ok {
 					workflowResult.Context[key] = value
-					stepContext[key] = value
+					nodeContext[key] = value
 					if session != nil {
 						session.SetContext(key, value)
 					}
@@ -399,9 +443,9 @@ func (e *DefaultWorkflowExecutor) executeParserActions(
 			}
 
 		case parser.ActionTypeRoute:
-			if nextStep, ok := action.Config["next_step"].(string); ok {
+			if nextNode, ok := action.Config["next_node"].(string); ok {
 				// Store for routing logic
-				stepContext["__next_step"] = nextStep
+				nodeContext["__next_node"] = nextNode
 				executed = append(executed, string(action.Type))
 			}
 
@@ -422,7 +466,7 @@ func (e *DefaultWorkflowExecutor) executeParserActions(
 		case parser.ActionTypeTriggerWorkflow:
 			// Store workflow trigger request
 			if workflowID, ok := action.Config["workflow_id"].(string); ok {
-				stepContext["__trigger_workflow"] = workflowID
+				nodeContext["__trigger_workflow"] = workflowID
 				executed = append(executed, string(action.Type))
 			}
 		}
@@ -431,265 +475,135 @@ func (e *DefaultWorkflowExecutor) executeParserActions(
 	return executed, nil
 }
 
-func (e *DefaultWorkflowExecutor) executeToolAction(
-	ctx context.Context,
-	action parser.Action,
-	msg engine.Message,
-	session *engine.Session,
-	workflowResult *engine.ExecutionResult,
-	stepContext map[string]any,
-) error {
-	// if e.toolManager == nil {
-	// 	return parser.ErrInvalidToolConfig().WithDetail("reason", "tool manager not configured")
-	// }
-	//
-	// toolID, ok := action.Config["tool_id"].(string)
-	// if !ok {
-	// 	return parser.ErrInvalidToolConfig().WithDetail("reason", "tool_id not found")
-	// }
-
-	// params := action.Config["params"]
-
-	// Execute tool
-	// toolResult, err := e.toolManager.ExecuteTool(
-	// 	ctx,
-	// 	kernel.ToolID(toolID),
-	// 	msg.TenantID,
-	// 	params,
-	// 	session,
-	// )
-	// if err != nil {
-	// 	return err
-	// }
-	//
-	// // Store tool result in workflow context
-	// resultKey := fmt.Sprintf("tool_%s_result", toolID)
-	// workflowResult.Context[resultKey] = toolResult
-	// stepContext[resultKey] = toolResult
-
-	return nil
-}
-
 func (e *DefaultWorkflowExecutor) executeWebhookAction(ctx context.Context, action parser.Action) error {
 	webhookURL, ok := action.Config["url"].(string)
 	if !ok {
 		return parser.ErrInvalidActionConfig().WithDetail("reason", "webhook url not found")
 	}
 
-	// TODO: Implement actual webhook HTTP call
-	log.Printf("📤 Webhook action: %s", webhookURL)
-
-	// For now, just log
-	// In production, you'd make an HTTP POST request here
-	// using net/http client with the action.Config data
+	log.Printf("📬 Webhook action: %s", webhookURL)
+	// TODO: Implement actual webhook HTTP POST request here
 
 	return nil
 }
 
 // ============================================================================
-// Other Step Types
+// Other Node Types
 // ============================================================================
 
-func (e *DefaultWorkflowExecutor) executeConditionStep(
+func (e *DefaultWorkflowExecutor) executeConditionNode(
 	ctx context.Context,
-	step engine.WorkflowStep,
+	node engine.WorkflowNode,
 	msg engine.Message,
 	session *engine.Session,
-	stepResult *engine.StepResult,
-	stepContext map[string]any,
+	nodeResult *engine.NodeResult,
+	nodeContext map[string]any,
 ) error {
-	// Get condition config
-	conditionType, _ := step.Config["type"].(string)
-	field, _ := step.Config["field"].(string)
-	operator, _ := step.Config["operator"].(string)
-	value := step.Config["value"]
+	// conditionType, _ := node.Config["type"].(string)
+	field, _ := node.Config["field"].(string)
+	operator, _ := node.Config["operator"].(string)
+	value := node.Config["value"]
 
-	// Evaluate condition based on type
 	var actualValue any
 	var conditionMet bool
 
-	switch field {
-	case "message.text":
-		actualValue = msg.Content.Text
-	case "message.type":
-		actualValue = msg.Content.Type
-	case "session.state":
-		if session != nil {
-			actualValue = session.CurrentState
-		}
-	default:
-		// Check in step context
-		if val, ok := stepContext[field]; ok {
-			actualValue = val
+	// Resolve the field to get the actual value from the context
+	if val, ok := nodeContext[field]; ok {
+		actualValue = val
+	} else {
+		// Fallback for direct message/session access for simplicity, though expressions are preferred
+		switch field {
+		case "message.text":
+			actualValue = msg.Content.Text
+		case "session.state":
+			if session != nil {
+				actualValue = session.CurrentState
+			}
 		}
 	}
 
-	// Evaluate operator
 	switch operator {
 	case "equals":
 		conditionMet = fmt.Sprintf("%v", actualValue) == fmt.Sprintf("%v", value)
 	case "contains":
 		if str, ok := actualValue.(string); ok {
 			if valStr, ok := value.(string); ok {
-				conditionMet = contains(str, valStr)
+				conditionMet = strings.Contains(str, valStr)
 			}
 		}
 	case "gt", "gte", "lt", "lte":
-		// Numeric comparisons
 		conditionMet = compareNumeric(actualValue, value, operator)
+	case "exists":
+		_, exists := nodeContext[field]
+		conditionMet = exists
 	default:
-		return engine.ErrInvalidWorkflowStep().
+		return engine.ErrInvalidWorkflowNode().
 			WithDetail("reason", "unsupported operator").
 			WithDetail("operator", operator)
 	}
 
-	stepResult.Output["condition_met"] = conditionMet
-	stepResult.Output["condition_type"] = conditionType
-	stepResult.Output["actual_value"] = actualValue
-	stepResult.Output["expected_value"] = value
+	nodeResult.Output["condition_met"] = conditionMet
 
 	if !conditionMet {
-		return fmt.Errorf("condition not met")
+		// This is not an execution error, but a logical failure.
+		// The main loop will handle routing to OnFailure.
+		nodeResult.Success = false
+		nodeResult.Error = "condition not met"
+		return nil
 	}
 
 	return nil
 }
 
-func (e *DefaultWorkflowExecutor) executeToolStep(
+func (e *DefaultWorkflowExecutor) executeToolNode(
 	ctx context.Context,
-	step engine.WorkflowStep,
+	node engine.WorkflowNode,
 	msg engine.Message,
 	session *engine.Session,
-	stepResult *engine.StepResult,
+	nodeResult *engine.NodeResult,
 	workflowResult *engine.ExecutionResult,
-	stepContext map[string]any,
+	nodeContext map[string]any,
 ) error {
-	// if e.toolManager == nil {
-	// 	return parser.ErrInvalidToolConfig().WithDetail("reason", "tool manager not configured")
-	// }
-	//
-	// toolID, ok := step.Config["tool_id"].(string)
-	// if !ok {
-	// 	return parser.ErrInvalidToolConfig().WithDetail("reason", "tool_id not found in config")
-	// }
-	//
-	// params := step.Config["params"]
-	//
-	// toolResult, err := e.toolManager.ExecuteTool(
-	// 	ctx,
-	// 	kernel.ToolID(toolID),
-	// 	msg.TenantID,
-	// 	params,
-	// 	session,
-	// )
-	// if err != nil {
-	// 	return parser.ErrToolExecutionFailed().
-	// 		WithDetail("tool_id", toolID).
-	// 		WithCause(err)
-	// }
-	//
-	// stepResult.Output["tool_result"] = toolResult
-	// workflowResult.Context[fmt.Sprintf("tool_%s_result", toolID)] = toolResult
-	// stepContext[fmt.Sprintf("tool_%s_result", toolID)] = toolResult
-
+	// TODO: Implement Tool Manager integration
+	// toolID, ok := node.Config["tool_id"].(string)
+	// ...
+	log.Println("Tool node execution is not yet implemented.")
+	nodeResult.Output["status"] = "skipped"
 	return nil
 }
 
-func (e *DefaultWorkflowExecutor) executeResponseStep(
+func (e *DefaultWorkflowExecutor) executeDelayNode(
 	ctx context.Context,
-	step engine.WorkflowStep,
-	msg engine.Message,
-	session *engine.Session,
-	stepResult *engine.StepResult,
-	stepContext map[string]any,
+	node engine.WorkflowNode,
+	nodeResult *engine.NodeResult,
 ) error {
-	message, ok := step.Config["message"].(string)
+	duration, ok := node.Config["duration_ms"].(float64)
 	if !ok {
-		return engine.ErrInvalidWorkflowStep().
-			WithDetail("reason", "message not found in config").
-			WithDetail("step_id", step.ID)
-	}
-
-	// Template replacement (simple version)
-	message = e.replaceTemplateVariables(message, stepContext)
-
-	stepResult.Output["response"] = message
-	stepResult.Output["should_respond"] = true
-
-	return nil
-}
-
-func (e *DefaultWorkflowExecutor) executeDelayStep(
-	ctx context.Context,
-	step engine.WorkflowStep,
-	stepResult *engine.StepResult,
-) error {
-	duration, ok := step.Config["duration"].(float64)
-	if !ok {
-		return engine.ErrInvalidWorkflowStep().
-			WithDetail("reason", "duration not found in config").
-			WithDetail("step_id", step.ID)
+		return engine.ErrInvalidWorkflowNode().
+			WithDetail("reason", "duration_ms not found or not a number in config").
+			WithDetail("node_id", node.ID)
 	}
 
 	select {
-	case <-time.After(time.Duration(duration) * time.Second):
-		stepResult.Output["delayed_seconds"] = duration
+	case <-time.After(time.Duration(duration) * time.Millisecond):
+		nodeResult.Output["delayed_ms"] = duration
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 }
 
-func (e *DefaultWorkflowExecutor) executeActionStep(
+func (e *DefaultWorkflowExecutor) ExecuteNode(
 	ctx context.Context,
-	step engine.WorkflowStep,
-	msg engine.Message,
-	session *engine.Session,
-	stepResult *engine.StepResult,
-	workflowResult *engine.ExecutionResult,
-	stepContext map[string]any,
-) error {
-	actionType, _ := step.Config["action_type"].(string)
-
-	switch actionType {
-	case "set_context":
-		key, _ := step.Config["key"].(string)
-		value := step.Config["value"]
-		if key != "" && value != nil {
-			workflowResult.Context[key] = value
-			stepContext[key] = value
-			if session != nil {
-				session.SetContext(key, value)
-			}
-		}
-	case "set_state":
-		state, _ := step.Config["state"].(string)
-		if state != "" {
-			workflowResult.NextState = state
-			if session != nil {
-				session.UpdateState(state)
-			}
-		}
-	default:
-		return engine.ErrInvalidWorkflowStep().
-			WithDetail("action_type", actionType).
-			WithDetail("reason", "unsupported action type")
-	}
-
-	return nil
-}
-
-func (e *DefaultWorkflowExecutor) ExecuteStep(
-	ctx context.Context,
-	step engine.WorkflowStep,
+	node engine.WorkflowNode,
 	message engine.Message,
 	session *engine.Session,
-	stepContext map[string]any,
-) (*engine.StepResult, error) {
+	nodeContext map[string]any,
+) (*engine.NodeResult, error) {
 	workflowResult := &engine.ExecutionResult{
 		Context: make(map[string]any),
 	}
-	return e.executeStepInternal(ctx, step, message, session, stepContext, workflowResult)
+	return e.executeNodeInternal(ctx, node, message, session, nodeContext, workflowResult)
 }
 
 // ============================================================================
@@ -701,46 +615,44 @@ func (e *DefaultWorkflowExecutor) ValidateWorkflow(ctx context.Context, workflow
 		return engine.ErrInvalidWorkflowConfig().WithDetail("reason", "workflow is not valid")
 	}
 
-	if len(workflow.Steps) == 0 {
-		return engine.ErrInvalidWorkflowConfig().WithDetail("reason", "workflow has no steps")
+	if len(workflow.Node) == 0 {
+		return engine.ErrInvalidWorkflowConfig().WithDetail("reason", "workflow has no node")
 	}
 
-	// Validar que todos los steps tengan IDs únicos
-	stepIDs := make(map[string]bool)
-	for _, step := range workflow.Steps {
-		if step.ID == "" {
-			return engine.ErrInvalidWorkflowStep().WithDetail("reason", "step has no ID")
+	nodeIDs := make(map[string]bool)
+	for _, node := range workflow.Node {
+		if node.ID == "" {
+			return engine.ErrInvalidWorkflowNode().WithDetail("reason", "node has no ID")
 		}
-		if stepIDs[step.ID] {
-			return engine.ErrInvalidWorkflowStep().
-				WithDetail("step_id", step.ID).
-				WithDetail("reason", "duplicate step ID")
+		if nodeIDs[node.ID] {
+			return engine.ErrInvalidWorkflowNode().
+				WithDetail("node_id", node.ID).
+				WithDetail("reason", "duplicate node ID")
 		}
-		stepIDs[step.ID] = true
+		nodeIDs[node.ID] = true
 
-		// Validar configuración del paso
-		if executor, ok := e.stepExecutors[step.Type]; ok {
-			if err := executor.ValidateConfig(step.Config); err != nil {
-				return errx.Wrap(err, "step config validation failed", errx.TypeValidation).
-					WithDetail("step_id", step.ID).
-					WithDetail("step_name", step.Name)
+		// Validate node config if an executor is registered for its type
+		if executor, ok := e.nodeExecutors[node.Type]; ok {
+			if err := executor.ValidateConfig(node.Config); err != nil {
+				return errx.Wrap(err, "node config validation failed", errx.TypeValidation).
+					WithDetail("node_id", node.ID).
+					WithDetail("node_name", node.Name)
 			}
 		}
 	}
 
-	// Validar referencias de OnSuccess y OnFailure
-	for _, step := range workflow.Steps {
-		if step.OnSuccess != "" && !stepIDs[step.OnSuccess] {
-			return engine.ErrInvalidWorkflowStep().
-				WithDetail("step_id", step.ID).
-				WithDetail("on_success", step.OnSuccess).
-				WithDetail("reason", "on_success references non-existent step")
+	for _, node := range workflow.Node {
+		if node.OnSuccess != "" && !nodeIDs[node.OnSuccess] {
+			return engine.ErrInvalidWorkflowNode().
+				WithDetail("node_id", node.ID).
+				WithDetail("on_success", node.OnSuccess).
+				WithDetail("reason", "on_success references non-existent node")
 		}
-		if step.OnFailure != "" && !stepIDs[step.OnFailure] {
-			return engine.ErrInvalidWorkflowStep().
-				WithDetail("step_id", step.ID).
-				WithDetail("on_failure", step.OnFailure).
-				WithDetail("reason", "on_failure references non-existent step")
+		if node.OnFailure != "" && !nodeIDs[node.OnFailure] {
+			return engine.ErrInvalidWorkflowNode().
+				WithDetail("node_id", node.ID).
+				WithDetail("on_failure", node.OnFailure).
+				WithDetail("reason", "on_failure references non-existent node")
 		}
 	}
 
@@ -754,60 +666,49 @@ func (e *DefaultWorkflowExecutor) ValidateWorkflow(ctx context.Context, workflow
 func (e *DefaultWorkflowExecutor) prepareInitialContext(message engine.Message, session *engine.Session) map[string]any {
 	context := make(map[string]any)
 
-	// Agregar información del mensaje
-	context["message_id"] = message.ID.String()
-	context["message_text"] = message.Content.Text
-	context["message_type"] = message.Content.Type
-	context["sender_id"] = message.SenderID
-	context["channel_id"] = message.ChannelID.String()
-
-	// Agregar contexto del mensaje si existe
-	if message.Context != nil {
-		for key, value := range message.Context {
-			context["msg_"+key] = value
-		}
+	// Add message information in a structured way
+	context["message"] = map[string]any{
+		"id":      message.ID.String(),
+		"text":    message.Content.Text,
+		"type":    message.Content.Type,
+		"sender":  message.SenderID,
+		"channel": message.ChannelID.String(),
+		"context": message.Context,
 	}
 
-	// Agregar información de la sesión si existe
+	// Add session information in a structured way
 	if session != nil {
-		context["session_id"] = session.ID
-		context["session_state"] = session.CurrentState
-
-		// Agregar contexto de la sesión
-		if session.Context != nil {
-			for key, value := range session.Context {
-				context["session_"+key] = value
-			}
+		context["session"] = map[string]any{
+			"id":      session.ID,
+			"state":   session.CurrentState,
+			"context": session.Context,
 		}
 	}
 
 	return context
 }
 
-func (e *DefaultWorkflowExecutor) prepareStepInput(
+func (e *DefaultWorkflowExecutor) prepareNodeInput(
 	message engine.Message,
 	session *engine.Session,
-	stepContext map[string]any,
+	nodeContext map[string]any,
 ) map[string]any {
 	input := make(map[string]any)
 
-	// Copiar contexto del paso
-	for key, value := range stepContext {
+	// Copy the entire node context to be the input for the next node
+	for key, value := range nodeContext {
 		input[key] = value
 	}
 
 	return input
 }
 
+// This function is less critical now that CEL-go handles expressions, but can be kept for simple cases or legacy use.
 func (e *DefaultWorkflowExecutor) replaceTemplateVariables(template string, context map[string]any) string {
-	// Simple template replacement
-	// In production, use a proper template engine like text/template
 	result := template
-	for key, value := range context {
-		placeholder := fmt.Sprintf("{{%s}}", key)
-		replacement := fmt.Sprintf("%v", value)
-		result = replaceAll(result, placeholder, replacement)
-	}
+	// This simple replacement is not robust for nested maps.
+	// The primary mechanism should be the CEL evaluator.
+	// This can be left as a fallback or for very simple, non-nested variables.
 	return result
 }
 
@@ -815,12 +716,9 @@ func (e *DefaultWorkflowExecutor) replaceTemplateVariables(template string, cont
 // Utility Functions
 // ============================================================================
 
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		(len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)))
-}
-
 func findSubstring(s, substr string) bool {
+	// This is a simplified implementation for demonstration.
+	// In a real application, `strings.Contains` is more efficient.
 	for i := 0; i <= len(s)-len(substr); i++ {
 		if s[i:i+len(substr)] == substr {
 			return true
@@ -829,33 +727,7 @@ func findSubstring(s, substr string) bool {
 	return false
 }
 
-func replaceAll(s, old, new string) string {
-	if old == new || old == "" {
-		return s
-	}
-	result := ""
-	for {
-		i := findIndex(s, old)
-		if i == -1 {
-			return result + s
-		}
-		result += s[:i] + new
-		s = s[i+len(old):]
-	}
-}
-
-func findIndex(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
-}
-
 func compareNumeric(a, b any, operator string) bool {
-	// Simple numeric comparison
-	// In production, use proper type conversion and comparison
 	aFloat, aOk := toFloat64(a)
 	bFloat, bOk := toFloat64(b)
 
@@ -889,7 +761,193 @@ func toFloat64(v any) (float64, bool) {
 		return float64(val), true
 	case int32:
 		return float64(val), true
+	case string: // Attempt to parse from string
+		var f float64
+		_, err := fmt.Sscanf(val, "%f", &f)
+		return f, err == nil
 	default:
 		return 0, false
 	}
+}
+
+func (e *DefaultWorkflowExecutor) ResumeFromNode(
+	ctx context.Context,
+	workflow engine.Workflow,
+	message engine.Message,
+	session *engine.Session,
+	startNodeID string,
+	savedNodeContext map[string]any,
+) (*engine.ExecutionResult, error) {
+	log.Printf("🔄 Resuming workflow execution: %s from node: %s", workflow.Name, startNodeID)
+
+	startTime := time.Now()
+	result := &engine.ExecutionResult{
+		Success:       true,
+		ShouldRespond: false,
+		Context:       make(map[string]any),
+		Executedodes:  []engine.NodeResult{},
+	}
+
+	// Validate workflow
+	if err := e.ValidateWorkflow(ctx, workflow); err != nil {
+		return nil, errx.Wrap(err, "workflow validation failed", errx.TypeValidation)
+	}
+
+	// Validate start node exists
+	startNode := workflow.GetNodeByID(startNodeID)
+	if startNode == nil {
+		return nil, engine.ErrNodeNotFound().WithDetail("node_id", startNodeID)
+	}
+
+	// Use saved context as initial context
+	nodeContext := savedNodeContext
+	if nodeContext == nil {
+		nodeContext = make(map[string]any)
+	}
+
+	// Ensure message and session are available in context
+	if _, ok := nodeContext["message"]; !ok {
+		nodeContext["message"] = map[string]any{
+			"id":      message.ID.String(),
+			"text":    message.Content.Text,
+			"type":    message.Content.Type,
+			"sender":  message.SenderID,
+			"channel": message.ChannelID.String(),
+			"context": message.Context,
+		}
+	}
+
+	if _, ok := nodeContext["session"]; !ok && session != nil {
+		nodeContext["session"] = map[string]any{
+			"id":      session.ID,
+			"state":   session.CurrentState,
+			"context": session.Context,
+		}
+	}
+
+	// Start from the specified node
+	currentNodeID := startNodeID
+	visitedNodes := make(map[string]bool)
+	maxNode := len(workflow.Node) * 2 // Prevent infinite loops
+
+	for currentNodeID != "" && len(result.Executedodes) < maxNode {
+		if visitedNodes[currentNodeID] {
+			return nil, engine.ErrCyclicWorkflow().
+				WithDetail("node_id", currentNodeID).
+				WithDetail("workflow_id", workflow.ID.String())
+		}
+		visitedNodes[currentNodeID] = true
+
+		node := workflow.GetNodeByID(currentNodeID)
+		if node == nil {
+			return nil, engine.ErrNodeNotFound().WithDetail("node", currentNodeID)
+		}
+
+		// Evaluate expressions in config
+		configToEvaluate := make(map[string]any)
+		for k, v := range node.Config {
+			configToEvaluate[k] = v
+		}
+
+		evaluatedData, err := e.expressionEvaluator.Evaluate(ctx, configToEvaluate, nodeContext)
+		if err != nil {
+			nodeResult := &engine.NodeResult{
+				NodeID:    node.ID,
+				NodeName:  node.Name,
+				Success:   false,
+				Error:     fmt.Sprintf("expression evaluation failed: %v", err),
+				Timestamp: time.Now(),
+			}
+			result.Executedodes = append(result.Executedodes, *nodeResult)
+			result.Success = false
+			result.ErrorMessage = nodeResult.Error
+			break
+		}
+
+		evaluatedConfig, ok := evaluatedData.(map[string]any)
+		if !ok {
+			nodeResult := &engine.NodeResult{
+				NodeID:    node.ID,
+				NodeName:  node.Name,
+				Success:   false,
+				Error:     "expression evaluation did not return a valid configuration map",
+				Timestamp: time.Now(),
+			}
+			result.Executedodes = append(result.Executedodes, *nodeResult)
+			result.Success = false
+			result.ErrorMessage = nodeResult.Error
+			break
+		}
+
+		nodeForExecution := *node
+		nodeForExecution.Config = evaluatedConfig
+
+		// Execute node
+		nodeResult, err := e.executeNodeInternal(ctx, nodeForExecution, message, session, nodeContext, result)
+		if err != nil {
+			if nodeResult == nil {
+				nodeResult = &engine.NodeResult{
+					NodeID: node.ID, NodeName: node.Name, Success: false,
+					Error: err.Error(), Timestamp: time.Now(),
+				}
+			} else if nodeResult.Error == "" {
+				nodeResult.Success = false
+				nodeResult.Error = err.Error()
+			}
+		}
+
+		result.Executedodes = append(result.Executedodes, *nodeResult)
+
+		if !nodeResult.Success {
+			result.Success = false
+			result.Error = fmt.Errorf("node %s failed: %s", node.Name, nodeResult.Error)
+			result.ErrorMessage = nodeResult.Error
+			if node.OnFailure != "" {
+				currentNodeID = node.OnFailure
+				continue
+			}
+			break
+		}
+
+		// Update context with node output
+		if nodeResult.Output != nil {
+			nodeContext[node.ID] = map[string]any{
+				"output":      nodeResult.Output,
+				"success":     nodeResult.Success,
+				"duration_ms": nodeResult.Duration,
+			}
+
+			for key, value := range nodeResult.Output {
+				result.Context[key] = value
+			}
+		}
+
+		// Handle response
+		if responseText, ok := nodeResult.Output["response"].(string); ok && responseText != "" {
+			result.Response = responseText
+			result.ShouldRespond = true
+		}
+		if shouldRespond, ok := nodeResult.Output["should_respond"].(bool); ok {
+			result.ShouldRespond = shouldRespond
+		}
+		if nextState, ok := nodeResult.Output["next_state"].(string); ok && nextState != "" {
+			result.NextState = nextState
+		}
+
+		// Determine next node
+		if nextNodeOverride, ok := nodeContext["__next_node"].(string); ok {
+			currentNodeID = nextNodeOverride
+			delete(nodeContext, "__next_node")
+		} else if node.OnSuccess != "" {
+			currentNodeID = node.OnSuccess
+		} else {
+			currentNodeID = ""
+		}
+	}
+
+	duration := time.Since(startTime)
+	log.Printf("✅ Workflow resume completed: %s in %v (nodes executed: %d)",
+		workflow.Name, duration, len(result.Executedodes))
+
+	return result, nil
 }

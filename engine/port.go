@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"time"
 
 	"github.com/Abraxas-365/relay/pkg/kernel"
 )
@@ -121,20 +122,29 @@ type WorkflowExecutor interface {
 	// Ejecutar workflow completo
 	Execute(ctx context.Context, workflow Workflow, message Message, session *Session) (*ExecutionResult, error)
 
+	ResumeFromNode(
+		ctx context.Context,
+		workflow Workflow,
+		message Message,
+		session *Session,
+		startNodeID string,
+		nodeContext map[string]any,
+	) (*ExecutionResult, error)
+
 	// Ejecutar paso específico
-	ExecuteStep(ctx context.Context, step WorkflowStep, message Message, session *Session, stepContext map[string]any) (*StepResult, error)
+	ExecuteNode(ctx context.Context, node WorkflowNode, message Message, session *Session, nodeContext map[string]any) (*NodeResult, error)
 
 	// Validar workflow
 	ValidateWorkflow(ctx context.Context, workflow Workflow) error
 }
 
-// StepExecutor ejecuta pasos específicos de workflow
-type StepExecutor interface {
+// NodeExecutor ejecuta pasos específicos de workflow
+type NodeExecutor interface {
 	// Ejecutar paso
-	Execute(ctx context.Context, step WorkflowStep, input map[string]any) (*StepResult, error)
+	Execute(ctx context.Context, node WorkflowNode, input map[string]any) (*NodeResult, error)
 
 	// Soporta el tipo de paso
-	SupportsType(stepType StepType) bool
+	SupportsType(nodeType NodeType) bool
 
 	// Validar configuración del paso
 	ValidateConfig(config map[string]any) error
@@ -154,4 +164,51 @@ type MessageProcessor interface {
 
 	// Procesar respuesta
 	ProcessResponse(ctx context.Context, msg Message, response string) error
+}
+
+// ============================================================================
+// Delay Scheduler Interface
+// ============================================================================
+
+// WorkflowContinuation stores the state needed to resume workflow execution
+type WorkflowContinuation struct {
+	ID           string         `json:"id"`
+	WorkflowID   string         `json:"workflow_id"`
+	NodeID       string         `json:"node_id"`
+	NextNodeID   string         `json:"next_node_id"`
+	MessageID    string         `json:"message_id"`
+	SessionID    string         `json:"session_id"`
+	TenantID     string         `json:"tenant_id"`
+	ChannelID    string         `json:"channel_id"`
+	SenderID     string         `json:"sender_id"`
+	NodeContext  map[string]any `json:"node_context"`
+	ScheduledFor time.Time      `json:"scheduled_for"`
+	CreatedAt    time.Time      `json:"created_at"`
+}
+
+// ContinuationHandler is called when a delayed execution is ready
+type ContinuationHandler func(ctx context.Context, continuation *WorkflowContinuation) error
+
+// DelayScheduler manages delayed workflow executions
+type DelayScheduler interface {
+	// Schedule schedules a workflow continuation after a delay
+	Schedule(ctx context.Context, continuation *WorkflowContinuation, delay time.Duration) error
+
+	// ShouldUseAsync determines if a delay should be handled asynchronously
+	ShouldUseAsync(duration time.Duration) bool
+
+	// StartWorker starts the background worker that processes scheduled delays
+	StartWorker(ctx context.Context)
+
+	// StopWorker stops the background worker
+	StopWorker()
+
+	// GetPendingCount returns the number of pending delayed executions
+	GetPendingCount(ctx context.Context) (int64, error)
+
+	// GetContinuation retrieves a continuation by ID
+	GetContinuation(ctx context.Context, id string) (*WorkflowContinuation, error)
+
+	// Cancel cancels a scheduled continuation
+	Cancel(ctx context.Context, id string) error
 }

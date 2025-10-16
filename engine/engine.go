@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/Abraxas-365/relay/pkg/kernel"
+	"slices"
 )
 
 // ============================================================================
@@ -23,9 +24,20 @@ type Message struct {
 	UpdatedAt time.Time        `db:"updated_at" json:"updated_at"`
 }
 
+// MessageType tipo de contenido del mensaje
+type MessageType string
+
+const (
+	MessageTypeText     MessageType = "text"
+	MessageTypeImage    MessageType = "image"
+	MessageTypeAudio    MessageType = "audio"
+	MessageTypeVideo    MessageType = "video"
+	MessageTypeDocument MessageType = "document"
+)
+
 // MessageContent contenido del mensaje
 type MessageContent struct {
-	Type        string         `json:"type"` // text, image, audio, video, document
+	Type        MessageType    `json:"type"` // text, image, audio, video, document
 	Text        string         `json:"text,omitempty"`
 	Attachments []string       `json:"attachments,omitempty"`
 	Metadata    map[string]any `json:"metadata,omitempty"`
@@ -52,7 +64,7 @@ type Workflow struct {
 	Name        string            `db:"name" json:"name"`
 	Description string            `db:"description" json:"description"`
 	Trigger     WorkflowTrigger   `db:"trigger" json:"trigger"`
-	Steps       []WorkflowStep    `db:"steps" json:"steps"`
+	Node        []WorkflowNode    `db:"nodes" json:"nodes"`
 	IsActive    bool              `db:"is_active" json:"is_active"`
 	CreatedAt   time.Time         `db:"created_at" json:"created_at"`
 	UpdatedAt   time.Time         `db:"updated_at" json:"updated_at"`
@@ -76,27 +88,26 @@ const (
 	TriggerTypeManual          TriggerType = "MANUAL"
 )
 
-// WorkflowStep paso de un workflow
-type WorkflowStep struct {
+// WorkflowNode paso de un workflow
+type WorkflowNode struct {
 	ID        string         `json:"id"`
 	Name      string         `json:"name"`
-	Type      StepType       `json:"type"` // condition, parser, tool, action, delay
+	Type      NodeType       `json:"type"` // condition, parser, tool, action, delay
 	Config    map[string]any `json:"config"`
-	OnSuccess string         `json:"on_success,omitempty"` // next step ID
-	OnFailure string         `json:"on_failure,omitempty"` // next step ID
+	OnSuccess string         `json:"on_success,omitempty"` // next node ID
+	OnFailure string         `json:"on_failure,omitempty"` // next node ID
 	Timeout   *int           `json:"timeout,omitempty"`    // seconds
 }
 
-// StepType tipo de paso
-type StepType string
+// NodeType tipo de paso
+type NodeType string
 
 const (
-	StepTypeCondition StepType = "CONDITION"
-	StepTypeParser    StepType = "PARSER"
-	StepTypeTool      StepType = "TOOL"
-	StepTypeAction    StepType = "ACTION"
-	StepTypeDelay     StepType = "DELAY"
-	StepTypeResponse  StepType = "RESPONSE"
+	NodeTypeCondition NodeType = "CONDITION"
+	NodeTypeParser    NodeType = "PARSER"
+	NodeTypeAction    NodeType = "ACTION"
+	NodeTypeDelay     NodeType = "DELAY"
+	NodeTypeResponse  NodeType = "RESPONSE"
 )
 
 // ============================================================================
@@ -160,13 +171,13 @@ type ExecutionResult struct {
 	Context       map[string]any `json:"context,omitempty"`
 	Error         error          `json:"-"`
 	ErrorMessage  string         `json:"error,omitempty"`
-	ExecutedSteps []StepResult   `json:"executed_steps,omitempty"`
+	Executedodes  []NodeResult   `json:"executed_nodes,omitempty"`
 }
 
-// StepResult resultado de un paso
-type StepResult struct {
-	StepID    string         `json:"step_id"`
-	StepName  string         `json:"step_name"`
+// NodeResult resultado de un paso
+type NodeResult struct {
+	NodeID    string         `json:"node_id"`
+	NodeName  string         `json:"node_name"`
 	Success   bool           `json:"success"`
 	Output    map[string]any `json:"output,omitempty"`
 	Error     string         `json:"error,omitempty"`
@@ -217,7 +228,7 @@ func (m *Message) HasAttachments() bool {
 
 // IsValid verifica si el workflow es válido
 func (w *Workflow) IsValid() bool {
-	return w.Name != "" && len(w.Steps) > 0 && !w.TenantID.IsEmpty()
+	return w.Name != "" && len(w.Node) > 0 && !w.TenantID.IsEmpty()
 }
 
 // Activate activa el workflow
@@ -243,17 +254,17 @@ func (w *Workflow) UpdateDetails(name, description string) {
 	w.UpdatedAt = time.Now()
 }
 
-// UpdateSteps actualiza los pasos del workflow
-func (w *Workflow) UpdateSteps(steps []WorkflowStep) {
-	w.Steps = steps
+// UpdateNode actualiza los pasos del workflow
+func (w *Workflow) UpdateNode(nodes []WorkflowNode) {
+	w.Node = nodes
 	w.UpdatedAt = time.Now()
 }
 
-// GetStepByID obtiene un paso por ID
-func (w *Workflow) GetStepByID(stepID string) *WorkflowStep {
-	for i := range w.Steps {
-		if w.Steps[i].ID == stepID {
-			return &w.Steps[i]
+// GetNodeByID obtiene un paso por ID
+func (w *Workflow) GetNodeByID(nodeID string) *WorkflowNode {
+	for i := range w.Node {
+		if w.Node[i].ID == nodeID {
+			return &w.Node[i]
 		}
 	}
 	return nil
@@ -268,10 +279,8 @@ func (w *Workflow) MatchesTrigger(trigger WorkflowTrigger) bool {
 	// Si tiene filtro de canales, verificar coincidencia
 	if len(w.Trigger.ChannelIDs) > 0 && len(trigger.ChannelIDs) > 0 {
 		for _, wChannelID := range w.Trigger.ChannelIDs {
-			for _, tChannelID := range trigger.ChannelIDs {
-				if wChannelID == tChannelID {
-					return true
-				}
+			if slices.Contains(trigger.ChannelIDs, wChannelID) {
+				return true
 			}
 		}
 		return false

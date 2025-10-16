@@ -29,8 +29,8 @@ var (
 	CodeInvalidWorkflowConfig   = ErrRegistry.Register("INVALID_WORKFLOW_CONFIG", errx.TypeValidation, http.StatusBadRequest, "Configuración de workflow inválida")
 	CodeWorkflowInactive        = ErrRegistry.Register("WORKFLOW_INACTIVE", errx.TypeBusiness, http.StatusForbidden, "Workflow está inactivo")
 	CodeWorkflowExecutionFailed = ErrRegistry.Register("WORKFLOW_EXECUTION_FAILED", errx.TypeInternal, http.StatusInternalServerError, "Ejecución de workflow falló")
-	CodeInvalidWorkflowStep     = ErrRegistry.Register("INVALID_WORKFLOW_STEP", errx.TypeValidation, http.StatusBadRequest, "Paso de workflow inválido")
-	CodeStepNotFound            = ErrRegistry.Register("STEP_NOT_FOUND", errx.TypeNotFound, http.StatusNotFound, "Paso no encontrado")
+	CodeInvalidWorkflowNode     = ErrRegistry.Register("INVALID_WORKFLOW_NODE", errx.TypeValidation, http.StatusBadRequest, "Paso de workflow inválido")
+	CodeNodeNotFound            = ErrRegistry.Register("NODE_NOT_FOUND", errx.TypeNotFound, http.StatusNotFound, "Paso no encontrado")
 	CodeCyclicWorkflow          = ErrRegistry.Register("CYCLIC_WORKFLOW", errx.TypeValidation, http.StatusBadRequest, "Workflow tiene ciclos")
 
 	// Session errors
@@ -44,7 +44,7 @@ var (
 
 	// Execution errors
 	CodeExecutionTimeout    = ErrRegistry.Register("EXECUTION_TIMEOUT", errx.TypeInternal, http.StatusRequestTimeout, "Ejecución excedió timeout")
-	CodeStepExecutionFailed = ErrRegistry.Register("STEP_EXECUTION_FAILED", errx.TypeInternal, http.StatusInternalServerError, "Ejecución de paso falló")
+	CodeNodeExecutionFailed = ErrRegistry.Register("NODE_EXECUTION_FAILED", errx.TypeInternal, http.StatusInternalServerError, "Ejecución de paso falló")
 )
 
 // ============================================================================
@@ -89,12 +89,12 @@ func ErrWorkflowExecutionFailed() *errx.Error {
 	return ErrRegistry.New(CodeWorkflowExecutionFailed)
 }
 
-func ErrInvalidWorkflowStep() *errx.Error {
-	return ErrRegistry.New(CodeInvalidWorkflowStep)
+func ErrInvalidWorkflowNode() *errx.Error {
+	return ErrRegistry.New(CodeInvalidWorkflowNode)
 }
 
-func ErrStepNotFound() *errx.Error {
-	return ErrRegistry.New(CodeStepNotFound)
+func ErrNodeNotFound() *errx.Error {
+	return ErrRegistry.New(CodeNodeNotFound)
 }
 
 func ErrCyclicWorkflow() *errx.Error {
@@ -128,6 +128,6 @@ func ErrExecutionTimeout() *errx.Error {
 	return ErrRegistry.New(CodeExecutionTimeout)
 }
 
-func ErrStepExecutionFailed() *errx.Error {
-	return ErrRegistry.New(CodeStepExecutionFailed)
+func ErrNodeExecutionFailed() *errx.Error {
+	return ErrRegistry.New(CodeNodeExecutionFailed)
 }

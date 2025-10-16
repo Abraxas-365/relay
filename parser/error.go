@@ -144,8 +144,8 @@ var (
 // ============================================================================
 
 var (
-	CodeStepExecutionFailed    = ErrRegistry.Register("STEP_EXECUTION_FAILED", errx.TypeInternal, http.StatusInternalServerError, "Fallo al ejecutar paso")
-	CodeInvalidStepConfig      = ErrRegistry.Register("INVALID_STEP_CONFIG", errx.TypeValidation, http.StatusBadRequest, "Configuración de paso inválida")
+	CodeNodeExecutionFailed    = ErrRegistry.Register("NODE_EXECUTION_FAILED", errx.TypeInternal, http.StatusInternalServerError, "Fallo al ejecutar paso")
+	CodeInvalidNodeConfig      = ErrRegistry.Register("INVALID_NODE_CONFIG", errx.TypeValidation, http.StatusBadRequest, "Configuración de paso inválida")
 	CodeParserIDNotFound       = ErrRegistry.Register("PARSER_ID_NOT_FOUND", errx.TypeValidation, http.StatusBadRequest, "ID de parser no encontrado en configuración")
 	CodeToolExecutionFailed    = ErrRegistry.Register("TOOL_EXECUTION_FAILED", errx.TypeInternal, http.StatusInternalServerError, "Fallo al ejecutar herramienta")
 	CodeWebhookExecutionFailed = ErrRegistry.Register("WEBHOOK_EXECUTION_FAILED", errx.TypeExternal, http.StatusBadGateway, "Fallo al ejecutar webhook")
@@ -172,12 +172,12 @@ func ErrInvalidConfigType() *errx.Error {
 // Error Constructor Functions - Workflow Integration
 // ============================================================================
 
-func ErrStepExecutionFailed() *errx.Error {
-	return ErrRegistry.New(CodeStepExecutionFailed)
+func ErrNodeExecutionFailed() *errx.Error {
+	return ErrRegistry.New(CodeNodeExecutionFailed)
 }
 
-func ErrInvalidStepConfig() *errx.Error {
-	return ErrRegistry.New(CodeInvalidStepConfig)
+func ErrInvalidNodeConfig() *errx.Error {
+	return ErrRegistry.New(CodeInvalidNodeConfig)
 }
 
 func ErrParserIDNotFound() *errx.Error {

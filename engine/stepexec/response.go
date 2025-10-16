@@ -13,23 +13,23 @@ import (
 // ResponseExecutor ejecuta pasos de respuesta
 type ResponseExecutor struct{}
 
-var _ engine.StepExecutor = (*ResponseExecutor)(nil)
+var _ engine.NodeExecutor = (*ResponseExecutor)(nil)
 
 func NewResponseExecutor() *ResponseExecutor {
 	return &ResponseExecutor{}
 }
 
-func (re *ResponseExecutor) Execute(ctx context.Context, step engine.WorkflowStep, input map[string]any) (*engine.StepResult, error) {
+func (re *ResponseExecutor) Execute(ctx context.Context, node engine.WorkflowNode, input map[string]any) (*engine.NodeResult, error) {
 	startTime := time.Now()
 
-	result := &engine.StepResult{
-		StepID:    step.ID,
-		StepName:  step.Name,
+	result := &engine.NodeResult{
+		NodeID:    node.ID,
+		NodeName:  node.Name,
 		Timestamp: startTime,
 		Output:    make(map[string]any),
 	}
 
-	responseText, ok := step.Config["text"].(string)
+	responseText, ok := node.Config["text"].(string)
 	if !ok {
 		result.Success = false
 		result.Error = "missing response text"
@@ -57,8 +57,8 @@ func (re *ResponseExecutor) interpolateVariables(text string, variables map[stri
 	return result
 }
 
-func (re *ResponseExecutor) SupportsType(stepType engine.StepType) bool {
-	return stepType == engine.StepTypeResponse
+func (re *ResponseExecutor) SupportsType(nodeType engine.NodeType) bool {
+	return nodeType == engine.NodeTypeResponse
 }
 
 func (re *ResponseExecutor) ValidateConfig(config map[string]any) error {

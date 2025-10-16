@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/Abraxas-365/craftable/ai/llm"
 	"github.com/Abraxas-365/craftable/ai/providers/aiopenai"
@@ -18,6 +20,7 @@ import (
 	"github.com/Abraxas-365/relay/channels/channelsrv"
 
 	"github.com/Abraxas-365/relay/engine"
+	"github.com/Abraxas-365/relay/engine/delayscheduler"
 	"github.com/Abraxas-365/relay/engine/engineinfra"
 	"github.com/Abraxas-365/relay/engine/msgprocessor"
 	"github.com/Abraxas-365/relay/engine/sessmanager"
@@ -46,12 +49,13 @@ import (
 	"github.com/Abraxas-365/relay/pkg/agent"
 	"github.com/Abraxas-365/relay/pkg/agent/agentinfra"
 	"github.com/Abraxas-365/relay/pkg/config"
+	"github.com/Abraxas-365/relay/pkg/kernel"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/jmoiron/sqlx"
 )
 
-// Container contiene todas las dependencias de la aplicación
+// Container contains all application dependencies
 type Container struct {
 	// =================================================================
 	// CONFIGURATION & INFRASTRUCTURE
@@ -118,21 +122,23 @@ type Container struct {
 	// =================================================================
 	// ENGINE
 	// =================================================================
-	MessageRepo       engine.MessageRepository
-	WorkflowRepo      engine.WorkflowRepository
-	EngineSessionRepo engine.SessionRepository
-	SessionManager    engine.SessionManager
-	WorkflowExecutor  engine.WorkflowExecutor
-	MessageProcessor  engine.MessageProcessor
+	MessageRepo         engine.MessageRepository
+	WorkflowRepo        engine.WorkflowRepository
+	EngineSessionRepo   engine.SessionRepository
+	SessionManager      engine.SessionManager
+	WorkflowExecutor    engine.WorkflowExecutor
+	MessageProcessor    engine.MessageProcessor
+	ExpressionEvaluator engine.ExpressionEvaluator
+	DelayScheduler      engine.DelayScheduler // ✅ NEW: Delay Scheduler
 
 	// Step Executors
-	ActionExecutor    engine.StepExecutor
-	ConditionExecutor engine.StepExecutor
-	ResponseExecutor  engine.StepExecutor
-	DelayExecutor     engine.StepExecutor
+	ActionExecutor    engine.NodeExecutor
+	ConditionExecutor engine.NodeExecutor
+	ResponseExecutor  engine.NodeExecutor
+	DelayExecutor     engine.NodeExecutor
 
 	// =================================================================
-	// PARSER 📝
+	// PARSER 🔍
 	// =================================================================
 	ParserRepo    parser.ParserRepository
 	ParserManager *parser.ParserManager
@@ -145,7 +151,7 @@ type Container struct {
 	NLPParserEngine     parser.ParserEngine
 
 	// =================================================================
-	// TOOL 🔧
+	// TOOL 🛠️
 	// =================================================================
 	ToolRepo     tool.ToolRepository
 	ToolExecutor tool.ToolExecutor
@@ -156,7 +162,7 @@ type Container struct {
 	LLMClient *llm.Client
 }
 
-// NewContainer crea un nuevo contenedor de dependencias
+// NewContainer creates a new dependency container
 func NewContainer(cfg *config.Config, db *sqlx.DB, redisClient *redis.Client) *Container {
 	c := &Container{
 		Config:      cfg,
@@ -164,7 +170,7 @@ func NewContainer(cfg *config.Config, db *sqlx.DB, redisClient *redis.Client) *C
 		RedisClient: redisClient,
 	}
 
-	// Inicializar dependencias en orden correcto
+	// Initialize dependencies in the correct order
 	log.Println("📦 Initializing dependency container...")
 
 	c.initEventBus()
@@ -176,7 +182,7 @@ func NewContainer(cfg *config.Config, db *sqlx.DB, redisClient *redis.Client) *C
 	c.initParserComponents()  // Parser before engine
 	c.initToolComponents()    // Tools before engine
 	c.initChannelComponents() // ⚡ Channels BEFORE engine
-	c.initEngineComponents()  // ⚡ Engine AFTER channels (can use ChannelManager)
+	c.initEngineComponents()  // ⚙️ Engine AFTER channels (can use ChannelManager)
 
 	log.Println("✅ Dependency container initialized successfully")
 
@@ -326,11 +332,11 @@ func (c *Container) initLLMComponents() {
 }
 
 // =================================================================
-// PARSER INITIALIZATION 📝
+// PARSER INITIALIZATION 🔍
 // =================================================================
 
 func (c *Container) initParserComponents() {
-	log.Println("  📝 Initializing parser components...")
+	log.Println("  🔍 Initializing parser components...")
 
 	c.ParserRepo = parserinfra.NewPostgresParserRepository(c.DB)
 	log.Println("    ✅ ParserRepo initialized")
@@ -384,11 +390,11 @@ func (c *Container) initParserComponents() {
 }
 
 // =================================================================
-// TOOL INITIALIZATION 🔧
+// TOOL INITIALIZATION 🛠️
 // =================================================================
 
 func (c *Container) initToolComponents() {
-	log.Println("  🔧 Initializing tool components...")
+	log.Println("  🛠️ Initializing tool components...")
 
 	// TODO: Initialize ToolRepo and ToolExecutor
 	// c.ToolRepo = toolinfra.NewPostgresToolRepository(c.DB)
@@ -449,31 +455,48 @@ func (c *Container) initEngineComponents() {
 	c.SessionManager = sessmanager.NewSessionManager(c.EngineSessionRepo, sessionConfig)
 	log.Println("    ✅ Session manager initialized")
 
+	// Initialize expression evaluator
+	c.ExpressionEvaluator = engine.NewCelEvaluator()
+	log.Println("    ✅ Expression evaluator initialized")
+
+	// ✅ NEW: Initialize delay scheduler with continuation handler
+	c.DelayScheduler = delayscheduler.NewRedisDelayScheduler(
+		c.RedisClient,
+		c.handleWorkflowContinuation,
+	)
+	log.Println("    ✅ Delay scheduler initialized")
+
+	// Start delay scheduler worker
+	ctx := context.Background()
+	c.DelayScheduler.StartWorker(ctx)
+	log.Println("    ✅ Delay scheduler worker started")
+
 	// Initialize step executors
 	c.ActionExecutor = stepexec.NewActionExecutor()
 	c.ConditionExecutor = stepexec.NewConditionExecutor()
 	c.ResponseExecutor = stepexec.NewResponseExecutor()
-	c.DelayExecutor = stepexec.NewDelayExecutor()
+	c.DelayExecutor = stepexec.NewDelayExecutor(c.DelayScheduler) // ✅ Pass scheduler
 	log.Println("    ✅ Step executors initialized")
 
-	// Initialize workflow executor with ParserManager and all step executors
+	// Initialize workflow executor with ExpressionEvaluator
 	c.WorkflowExecutor = workflowexec.NewDefaultWorkflowExecutor(
-		c.ParserManager, // 📝 ParserManager is now the first parameter
+		c.ParserManager,
 		c.ChannelManager,
+		c.ExpressionEvaluator,
 		c.ActionExecutor,
 		c.ConditionExecutor,
 		c.ResponseExecutor,
 		c.DelayExecutor,
 	)
-	log.Println("    ✅ Workflow executor initialized with parser manager")
+	log.Println("    ✅ Workflow executor initialized with parser manager and expression evaluator")
 
-	// ⚡ Initialize message processor WITH ChannelManager (no injection needed!)
+	// ⚡ Initialize message processor WITH ChannelManager
 	c.MessageProcessor = msgprocessor.NewMessageProcessor(
 		c.MessageRepo,
 		c.WorkflowRepo,
 		c.SessionManager,
 		c.WorkflowExecutor,
-		c.ChannelManager, // ⚡ ChannelManager already exists!
+		c.ChannelManager, // ChannelManager already exists!
 	)
 	log.Println("    ✅ Message processor initialized with ChannelManager")
 
@@ -499,6 +522,114 @@ func (c *Container) initEngineComponents() {
 }
 
 // =================================================================
+// WORKFLOW CONTINUATION HANDLER
+// =================================================================
+
+// handleWorkflowContinuation is called when a delayed execution is ready
+func (c *Container) handleWorkflowContinuation(
+	ctx context.Context,
+	continuation *engine.WorkflowContinuation,
+) error {
+	log.Printf("🔄 Resuming workflow %s from step %s",
+		continuation.WorkflowID, continuation.NodeID)
+
+	// Get session
+	session, err := c.SessionManager.Get(ctx, kernel.SessionID(continuation.SessionID))
+	if err != nil {
+		return fmt.Errorf("failed to get session: %w", err)
+	}
+
+	// Reconstruct message from continuation context
+	message := engine.Message{
+		ID:        kernel.MessageID(continuation.MessageID),
+		TenantID:  kernel.TenantID(continuation.TenantID),
+		ChannelID: kernel.ChannelID(continuation.ChannelID),
+		SenderID:  continuation.SenderID,
+		Content: engine.MessageContent{
+			Text: fmt.Sprintf("Resuming after delay from step %s", continuation.NodeID),
+			Type: engine.MessageTypeText,
+		},
+		Context: continuation.NodeContext,
+	}
+
+	// Get workflow
+	workflow, err := c.WorkflowRepo.FindByID(ctx, kernel.WorkflowID(continuation.WorkflowID))
+	if err != nil {
+		return fmt.Errorf("failed to get workflow: %w", err)
+	}
+
+	// ✅ Resume from next step (not re-execute entire workflow!)
+	var result *engine.ExecutionResult
+	if continuation.NextNodeID != "" {
+		// Resume from the next step with saved context
+		result, err = c.WorkflowExecutor.ResumeFromNode(
+			ctx,
+			*workflow,
+			message,
+			session,
+			continuation.NextNodeID,
+			continuation.NodeContext,
+		)
+	} else {
+		// No next step, workflow is complete
+		log.Printf("✅ Workflow %s completed (no next step after delay)", workflow.ID.String())
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("failed to resume workflow: %w", err)
+	}
+
+	log.Printf("✅ Workflow resumed successfully: success=%v, response=%s",
+		result.Success, result.Response)
+
+	// Update session with result
+	if result.Context != nil {
+		for key, value := range result.Context {
+			session.SetContext(key, value)
+		}
+	}
+	if result.NextState != "" {
+		session.UpdateState(result.NextState)
+	}
+	session.ExtendExpiration(30 * time.Minute)
+	if err := c.SessionManager.Update(ctx, *session); err != nil {
+		log.Printf("⚠️  Failed to update session: %v", err)
+	}
+
+	// Send response if needed
+	if result.ShouldRespond && result.Response != "" {
+		outgoingMsg := channels.OutgoingMessage{
+			RecipientID: message.SenderID,
+			Content: channels.MessageContent{
+				Type: "text",
+				Text: result.Response,
+			},
+			Metadata: map[string]any{
+				"workflow_id":        continuation.WorkflowID,
+				"continuation_id":    continuation.ID,
+				"delayed_from_step":  continuation.NodeID,
+				"workflow_triggered": true,
+				"timestamp":          time.Now().Unix(),
+			},
+		}
+
+		if err := c.ChannelManager.SendMessage(
+			ctx,
+			message.TenantID,
+			message.ChannelID,
+			outgoingMsg,
+		); err != nil {
+			log.Printf("⚠️  Failed to send response: %v", err)
+		} else {
+			log.Printf("✅ Response sent successfully to %s", message.SenderID)
+		}
+	}
+
+	return nil
+}
+
+// =================================================================
 // UTILITY METHODS
 // =================================================================
 
@@ -518,6 +649,12 @@ type RouteGroup struct {
 
 func (c *Container) Cleanup() {
 	log.Println("🧹 Cleaning up container resources...")
+
+	// ✅ NEW: Stop delay scheduler worker
+	if c.DelayScheduler != nil {
+		log.Println("  ⏰ Stopping delay scheduler...")
+		c.DelayScheduler.StopWorker()
+	}
 
 	if c.EventBus != nil {
 		log.Println("  ⚡ Disconnecting event bus...")
@@ -569,6 +706,7 @@ func (c *Container) HealthCheck() map[string]bool {
 	health["channel_manager"] = c.ChannelManager != nil
 	health["whatsapp_adapter"] = c.WhatsAppAdapter != nil
 	health["agent_chat_repo"] = c.AgentChatRepo != nil
+	health["delay_scheduler"] = c.DelayScheduler != nil // ✅ NEW
 
 	return health
 }
@@ -592,6 +730,7 @@ func (c *Container) GetServiceNames() []string {
 		"ParserManager",
 		"EventBus",
 		"AgentChatRepo",
+		"DelayScheduler", // ✅ NEW
 	}
 }
 
@@ -646,4 +785,12 @@ func (c *Container) GetChannelAdapterNames() []string {
 	}
 	// TODO: Add other adapters
 	return adapters
+}
+
+// ✅ NEW: Get delay scheduler metrics
+func (c *Container) GetDelaySchedulerMetrics(ctx context.Context) (int64, error) {
+	if c.DelayScheduler != nil {
+		return c.DelayScheduler.GetPendingCount(ctx)
+	}
+	return 0, fmt.Errorf("delay scheduler not initialized")
 }

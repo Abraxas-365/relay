@@ -13,24 +13,24 @@ import (
 // ConditionExecutor ejecuta condiciones
 type ConditionExecutor struct{}
 
-var _ engine.StepExecutor = (*ConditionExecutor)(nil)
+var _ engine.NodeExecutor = (*ConditionExecutor)(nil)
 
 func NewConditionExecutor() *ConditionExecutor {
 	return &ConditionExecutor{}
 }
 
-func (ce *ConditionExecutor) Execute(ctx context.Context, step engine.WorkflowStep, input map[string]any) (*engine.StepResult, error) {
+func (ce *ConditionExecutor) Execute(ctx context.Context, node engine.WorkflowNode, input map[string]any) (*engine.NodeResult, error) {
 	startTime := time.Now()
 
-	result := &engine.StepResult{
-		StepID:    step.ID,
-		StepName:  step.Name,
+	result := &engine.NodeResult{
+		NodeID:    node.ID,
+		NodeName:  node.Name,
 		Timestamp: startTime,
 		Output:    make(map[string]any),
 	}
 
 	// Obtener configuración
-	conditionType, ok := step.Config["condition_type"].(string)
+	conditionType, ok := node.Config["condition_type"].(string)
 	if !ok {
 		result.Success = false
 		result.Error = "missing condition_type"
@@ -43,13 +43,13 @@ func (ce *ConditionExecutor) Execute(ctx context.Context, step engine.WorkflowSt
 
 	switch conditionType {
 	case "contains":
-		conditionMet, err = ce.evaluateContains(step.Config, input)
+		conditionMet, err = ce.evaluateContains(node.Config, input)
 	case "equals":
-		conditionMet, err = ce.evaluateEquals(step.Config, input)
+		conditionMet, err = ce.evaluateEquals(node.Config, input)
 	case "exists":
-		conditionMet, err = ce.evaluateExists(step.Config, input)
+		conditionMet, err = ce.evaluateExists(node.Config, input)
 	case "regex":
-		conditionMet, err = ce.evaluateRegex(step.Config, input)
+		conditionMet, err = ce.evaluateRegex(node.Config, input)
 	default:
 		result.Success = false
 		result.Error = fmt.Sprintf("unknown condition type: %s", conditionType)
@@ -126,8 +126,8 @@ func (ce *ConditionExecutor) evaluateRegex(config map[string]any, input map[stri
 	return false, errx.New("regex evaluation not implemented", errx.TypeInternal)
 }
 
-func (ce *ConditionExecutor) SupportsType(stepType engine.StepType) bool {
-	return stepType == engine.StepTypeCondition
+func (ce *ConditionExecutor) SupportsType(nodeType engine.NodeType) bool {
+	return nodeType == engine.NodeTypeCondition
 }
 
 func (ce *ConditionExecutor) ValidateConfig(config map[string]any) error {

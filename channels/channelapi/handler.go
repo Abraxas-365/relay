@@ -158,7 +158,7 @@ func (h *ChannelHandler) transformToEngineMessage(
 		ChannelID: channel.ID,
 		SenderID:  incomingMsg.SenderID,
 		Content: engine.MessageContent{
-			Type:        incomingMsg.Content.Type,
+			Type:        engine.MessageType(incomingMsg.Content.Type),
 			Text:        incomingMsg.Content.Text,
 			Attachments: h.extractAttachmentURLs(incomingMsg.Content),
 			Metadata:    contentMetadata,

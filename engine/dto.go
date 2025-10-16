@@ -55,14 +55,14 @@ type CreateWorkflowRequest struct {
 	TenantID kernel.TenantID `json:"tenant_id" validate:"required"`
 	Name     string          `json:"name" validate:"required,min=2"`
 	Trigger  WorkflowTrigger `json:"trigger" validate:"required"`
-	Steps    []WorkflowStep  `json:"steps" validate:"required,min=1"`
+	Nodes    []WorkflowNode  `json:"nodes" validate:"required,min=1"`
 }
 
 // UpdateWorkflowRequest request para actualizar un workflow
 type UpdateWorkflowRequest struct {
 	Name     *string          `json:"name,omitempty"`
 	Trigger  *WorkflowTrigger `json:"trigger,omitempty"`
-	Steps    *[]WorkflowStep  `json:"steps,omitempty"`
+	Nodes    *[]WorkflowNode  `json:"nodes,omitempty"`
 	IsActive *bool            `json:"is_active,omitempty"`
 }
 
@@ -205,7 +205,7 @@ type BulkWorkflowOperationResponse struct {
 // ValidateWorkflowRequest request para validar un workflow
 type ValidateWorkflowRequest struct {
 	Trigger WorkflowTrigger `json:"trigger" validate:"required"`
-	Steps   []WorkflowStep  `json:"steps" validate:"required,min=1"`
+	Nodes   []WorkflowNode  `json:"nodes" validate:"required,min=1"`
 }
 
 // ValidateWorkflowResponse respuesta de validación
@@ -246,7 +246,7 @@ type WorkflowDetailsDTO struct {
 	ID        kernel.WorkflowID `json:"id"`
 	Name      string            `json:"name"`
 	IsActive  bool              `json:"is_active"`
-	StepCount int               `json:"step_count"`
+	NodeCount int               `json:"node_count"`
 }
 
 // ToDTO convierte Workflow a WorkflowDetailsDTO
@@ -255,7 +255,7 @@ func (w *Workflow) ToDTO() WorkflowDetailsDTO {
 		ID:        w.ID,
 		Name:      w.Name,
 		IsActive:  w.IsActive,
-		StepCount: len(w.Steps),
+		NodeCount: len(w.Node),
 	}
 }
 
