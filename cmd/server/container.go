@@ -474,7 +474,6 @@ func (c *Container) initEngineComponents() {
 	// Initialize step executors
 	c.ActionExecutor = nodeexec.NewActionExecutor()
 	c.ConditionExecutor = nodeexec.NewConditionExecutor()
-	c.ResponseExecutor = nodeexec.NewResponseExecutor()
 	c.DelayExecutor = nodeexec.NewDelayExecutor(c.DelayScheduler) // ✅ Pass scheduler
 	log.Println("    ✅ Step executors initialized")
 

@@ -109,12 +109,13 @@ const (
 	NodeTypeDelay     NodeType = "DELAY"
 	NodeTypeResponse  NodeType = "RESPONSE"
 
-	NodeTypeSwitch    NodeType = "SWITCH"
-	NodeTypeTransform NodeType = "TRANSFORM"
-	NodeTypeHTTP      NodeType = "HTTP"
-	NodeTypeLoop      NodeType = "LOOP"
-	NodeTypeValidate  NodeType = "VALIDATE"
-	NodeTypeAIAgent   NodeType = "AI_AGENT"
+	NodeTypeSwitch      NodeType = "SWITCH"
+	NodeTypeTransform   NodeType = "TRANSFORM"
+	NodeTypeHTTP        NodeType = "HTTP"
+	NodeTypeLoop        NodeType = "LOOP"
+	NodeTypeValidate    NodeType = "VALIDATE"
+	NodeTypeAIAgent     NodeType = "AI_AGENT"
+	NodeTypeSendMessage NodeType = "SEND_MESSAGE"
 )
 
 // ============================================================================

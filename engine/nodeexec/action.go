@@ -49,10 +49,6 @@ func (ae *ActionExecutor) Execute(ctx context.Context, node engine.WorkflowNode,
 		err = ae.executeConsoleLog(ctx, node, input, result)
 	case "set_context":
 		err = ae.executeSetContext(ctx, node, input, result)
-	case "delay":
-		err = ae.executeDelay(ctx, node, input, result)
-	case "response":
-		err = ae.executeResponse(ctx, node, input, result)
 	default:
 		result.Success = false
 		result.Error = fmt.Sprintf("unknown action type: %s", actionType)
@@ -115,61 +111,6 @@ func (ae *ActionExecutor) executeSetContext(ctx context.Context, node engine.Wor
 	result.Success = true
 	result.Output = map[string]any{
 		"context": interpolatedContext,
-	}
-	return nil
-}
-
-// executeDelay espera un tiempo determinado
-func (ae *ActionExecutor) executeDelay(ctx context.Context, node engine.WorkflowNode, input map[string]any, result *engine.NodeResult) error {
-	durationMs, ok := node.Config["duration_ms"].(float64)
-	if !ok {
-		// Intentar como int
-		if durationInt, ok := node.Config["duration_ms"].(int); ok {
-			durationMs = float64(durationInt)
-		} else {
-			result.Success = false
-			result.Error = "missing or invalid duration_ms"
-			return errx.New("missing duration_ms in delay action", errx.TypeValidation)
-		}
-	}
-
-	duration := time.Duration(durationMs) * time.Millisecond
-	log.Printf("🔹 [WORKFLOW ACTION] %s: Delaying for %v", node.Name, duration)
-
-	select {
-	case <-time.After(duration):
-		log.Printf("   Delay completed")
-	case <-ctx.Done():
-		result.Success = false
-		result.Error = "delay cancelled"
-		return ctx.Err()
-	}
-
-	result.Success = true
-	result.Output = map[string]any{
-		"delayed_ms": durationMs,
-	}
-	return nil
-}
-
-// executeResponse genera una respuesta
-func (ae *ActionExecutor) executeResponse(ctx context.Context, node engine.WorkflowNode, input map[string]any, result *engine.NodeResult) error {
-	responseText, ok := node.Config["text"].(string)
-	if !ok {
-		result.Success = false
-		result.Error = "missing or invalid response text"
-		return errx.New("missing text in response action", errx.TypeValidation)
-	}
-
-	// Interpolar variables
-	formattedResponse := ae.interpolateVariables(responseText, input)
-
-	log.Printf("🔹 [WORKFLOW ACTION] %s: Response prepared: %s", node.Name, formattedResponse)
-
-	result.Success = true
-	result.Output = map[string]any{
-		"response":       formattedResponse,
-		"should_respond": true,
 	}
 	return nil
 }

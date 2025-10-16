@@ -51,7 +51,6 @@ func (e *DefaultWorkflowExecutor) RegisterNodeExecutor(executor engine.NodeExecu
 		engine.NodeTypeParser,
 		engine.NodeTypeAction,
 		engine.NodeTypeDelay,
-		engine.NodeTypeResponse,
 	} {
 		if executor.SupportsType(nodeType) {
 			e.nodeExecutors[nodeType] = executor
