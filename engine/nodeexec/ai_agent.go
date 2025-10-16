@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"maps"
 	"time"
 
 	"github.com/Abraxas-365/craftable/ai/llm"
@@ -12,18 +13,17 @@ import (
 	"github.com/Abraxas-365/relay/engine"
 	"github.com/Abraxas-365/relay/pkg/agent"
 	"github.com/Abraxas-365/relay/pkg/kernel"
-	"maps"
 )
 
-// AIAgentExecutor executes AI agent nodes with optional memory and tools
 type AIAgentExecutor struct {
 	agentChatRepo agent.AgentChatRepository
-	// toolManager can be added here when tools are implemented
 }
 
 var _ engine.NodeExecutor = (*AIAgentExecutor)(nil)
 
-func NewAIAgentExecutor(agentChatRepo agent.AgentChatRepository) *AIAgentExecutor {
+func NewAIAgentExecutor(
+	agentChatRepo agent.AgentChatRepository,
+) *AIAgentExecutor {
 	return &AIAgentExecutor{
 		agentChatRepo: agentChatRepo,
 	}
@@ -57,18 +57,18 @@ func (e *AIAgentExecutor) Execute(ctx context.Context, node engine.WorkflowNode,
 		return result, errx.New("no user message found", errx.TypeValidation)
 	}
 
-	// Get session if available
-	session := e.extractSession(input)
+	// Extract conversation ID (for memory persistence)
+	conversationID := e.extractConversationID(input)
 
-	log.Printf("🤖 AI Agent '%s' processing with model: %s (memory: %v)",
-		node.Name, aiConfig.Model, aiConfig.UseMemory)
+	log.Printf("🤖 AI Agent '%s' processing with model: %s (memory: %v, conversation_id: %s)",
+		node.Name, aiConfig.Model, aiConfig.UseMemory, conversationID)
 
 	var responseText string
 	var metadata map[string]any
 
-	// Decide execution mode based on UseMemory flag
-	if aiConfig.UseMemory && session != nil {
-		responseText, metadata, err = e.executeWithAgent(ctx, aiConfig, userMessage, session, input)
+	// Decide execution mode based on UseMemory flag and conversation ID
+	if aiConfig.UseMemory && conversationID != "" {
+		responseText, metadata, err = e.executeWithAgent(ctx, aiConfig, userMessage, conversationID, input)
 	} else {
 		responseText, metadata, err = e.executeWithLLM(ctx, aiConfig, userMessage, input)
 	}
@@ -83,10 +83,11 @@ func (e *AIAgentExecutor) Execute(ctx context.Context, node engine.WorkflowNode,
 	// Store results
 	result.Success = true
 	result.Output["ai_response"] = responseText
-	result.Output["response"] = responseText // For compatibility with SendMessage
+	result.Output["response"] = responseText
 	result.Output["model"] = aiConfig.Model
 	result.Output["provider"] = aiConfig.Provider
 	result.Output["use_memory"] = aiConfig.UseMemory
+	result.Output["conversation_id"] = conversationID
 
 	// Add metadata
 	if metadata != nil {
@@ -94,7 +95,6 @@ func (e *AIAgentExecutor) Execute(ctx context.Context, node engine.WorkflowNode,
 	}
 
 	result.Duration = time.Since(startTime).Milliseconds()
-
 	log.Printf("✅ AI Agent '%s' completed in %dms", node.Name, result.Duration)
 
 	return result, nil
@@ -115,7 +115,7 @@ func (e *AIAgentExecutor) executeWithLLM(
 		llm.NewSystemMessage(config.SystemPrompt),
 	}
 
-	// Optionally add context messages
+	// Optionally add context messages from input
 	contextMessages := e.buildContextMessagesFromInput(input)
 	messages = append(messages, contextMessages...)
 
@@ -132,35 +132,35 @@ func (e *AIAgentExecutor) executeWithLLM(
 	metadata := map[string]any{
 		"mode":          "llm",
 		"finish_reason": response.Message.Content,
-	}
-
-	metadata["tokens_used"] = map[string]any{
-		"prompt":     response.Usage.PromptTokens,
-		"completion": response.Usage.CompletionTokens,
-		"total":      response.Usage.TotalTokens,
+		"tokens_used": map[string]any{
+			"prompt":     response.Usage.PromptTokens,
+			"completion": response.Usage.CompletionTokens,
+			"total":      response.Usage.TotalTokens,
+		},
 	}
 
 	return response.Message.Content, metadata, nil
 }
 
-// executeWithAgent uses agentx with persistent SessionMemory
+// executeWithAgent uses agentx with persistent memory (no Session entity required)
 func (e *AIAgentExecutor) executeWithAgent(
 	ctx context.Context,
 	config *engine.AIAgentConfig,
 	userMessage string,
-	session *engine.Session,
+	conversationID string,
 	input map[string]any,
 ) (string, map[string]any, error) {
 	// Create LLM client
 	llmClient := config.GetLLMClient()
 
-	// Build context messages from session
-	contextMessages := e.buildContextMessagesFromSession(session, input)
+	// Build context messages from input
+	contextMessages := e.buildContextMessagesFromInput(input)
 
 	// Create SessionMemory with persistent storage
+	// Use conversationID as the session identifier
 	memory := agent.NewSessionMemory(
 		ctx,
-		session.ID,
+		kernel.SessionID(conversationID),
 		config.SystemPrompt,
 		contextMessages,
 		e.agentChatRepo,
@@ -190,9 +190,9 @@ func (e *AIAgentExecutor) executeWithAgent(
 
 	// Build metadata
 	metadata := map[string]any{
-		"mode":       "agent",
-		"session_id": session.ID.String(),
-		"has_memory": true,
+		"mode":            "agent",
+		"conversation_id": conversationID,
+		"has_memory":      true,
 	}
 
 	return response, metadata, nil
@@ -200,10 +200,15 @@ func (e *AIAgentExecutor) executeWithAgent(
 
 // extractUserMessage gets the user message from input
 func (e *AIAgentExecutor) extractUserMessage(input map[string]any) string {
-	// Try to get from message.text
-	if msgMap, ok := input["message"].(map[string]any); ok {
-		if text, ok := msgMap["text"].(string); ok && text != "" {
+	// Try trigger.text (n8n-style webhook trigger)
+	if trigger, ok := input["trigger"].(map[string]any); ok {
+		if text, ok := trigger["text"].(string); ok && text != "" {
 			return text
+		}
+		if msg, ok := trigger["message"].(map[string]any); ok {
+			if text, ok := msg["text"].(string); ok && text != "" {
+				return text
+			}
 		}
 	}
 
@@ -217,63 +222,102 @@ func (e *AIAgentExecutor) extractUserMessage(input map[string]any) string {
 		return text
 	}
 
-	return ""
-}
-
-// extractSession gets the session from input
-func (e *AIAgentExecutor) extractSession(input map[string]any) *engine.Session {
-	// This is a simplified extraction - in production, you might want to
-	// reconstruct the full Session object from the input
-	if sessionMap, ok := input["session"].(map[string]any); ok {
-		// Extract session ID
-		sessionID := ""
-		if id, ok := sessionMap["id"].(string); ok {
-			sessionID = id
-		}
-
-		if sessionID == "" {
-			return nil
-		}
-
-		// Create a minimal session object
-		// In production, you might want to fully reconstruct it
-		return &engine.Session{
-			ID:           kernel.SessionID(sessionID),
-			Context:      make(map[string]any),
-			CurrentState: "",
+	// Try input.body.message (from HTTP request)
+	if body, ok := input["body"].(map[string]any); ok {
+		if text, ok := body["message"].(string); ok && text != "" {
+			return text
 		}
 	}
 
-	return nil
+	return ""
+}
+
+// extractConversationID gets a unique conversation identifier for memory persistence
+func (e *AIAgentExecutor) extractConversationID(input map[string]any) string {
+	// Try conversation_id from config (highest priority)
+	if convID, ok := input["conversation_id"].(string); ok && convID != "" {
+		return convID
+	}
+
+	// Try from trigger data
+	if trigger, ok := input["trigger"].(map[string]any); ok {
+		if convID, ok := trigger["conversation_id"].(string); ok && convID != "" {
+			return convID
+		}
+
+		// Try user_id as fallback (for user-specific conversations)
+		if userID, ok := trigger["user_id"].(string); ok && userID != "" {
+			return userID
+		}
+
+		// Try sender_id (for messaging platforms)
+		if senderID, ok := trigger["sender_id"].(string); ok && senderID != "" {
+			return senderID
+		}
+
+		// Try channel + sender combination
+		if channelID, ok := trigger["channel_id"].(string); ok {
+			if senderID, ok := trigger["sender_id"].(string); ok {
+				return fmt.Sprintf("%s:%s", channelID, senderID)
+			}
+		}
+	}
+
+	// Try user_id from input
+	if userID, ok := input["user_id"].(string); ok && userID != "" {
+		return userID
+	}
+
+	// Try thread_id (for threaded conversations)
+	if threadID, ok := input["thread_id"].(string); ok && threadID != "" {
+		return threadID
+	}
+
+	// No conversation ID found - agent will run without memory
+	return ""
 }
 
 // buildContextMessagesFromInput creates context messages from workflow input
 func (e *AIAgentExecutor) buildContextMessagesFromInput(input map[string]any) []llm.Message {
 	var contextMessages []llm.Message
 
-	// Add any relevant context from input
-	// Example: Add information about the current workflow state
+	// Add context from previous nodes if available
+	if context, ok := input["context"].(map[string]any); ok {
+		// Example: Add user information
+		if userInfo, ok := context["user_info"].(string); ok && userInfo != "" {
+			contextMessages = append(contextMessages,
+				llm.NewSystemMessage(fmt.Sprintf("User information: %s", userInfo)))
+		}
 
-	return contextMessages
-}
+		// Example: Add conversation history from previous execution
+		if history, ok := context["history"].([]any); ok && len(history) > 0 {
+			for _, item := range history {
+				if historyMap, ok := item.(map[string]any); ok {
+					role, _ := historyMap["role"].(string)
+					content, _ := historyMap["content"].(string)
 
-// buildContextMessagesFromSession creates context messages from session data
-func (e *AIAgentExecutor) buildContextMessagesFromSession(session *engine.Session, input map[string]any) []llm.Message {
-	var contextMessages []llm.Message
-
-	// Add session state context if available
-	if session.CurrentState != "" {
-		// You can optionally add session state as context
-		// contextMsg := llm.NewSystemMessage(fmt.Sprintf("Current session state: %s", session.CurrentState))
-		// contextMessages = append(contextMessages, contextMsg)
+					switch role {
+					case "user":
+						contextMessages = append(contextMessages, llm.NewUserMessage(content))
+					case "assistant":
+						contextMessages = append(contextMessages, llm.NewAssistantMessage(content))
+					case "system":
+						contextMessages = append(contextMessages, llm.NewSystemMessage(content))
+					}
+				}
+			}
+		}
 	}
 
-	// Add any custom context from session.Context
-	if session.Context != nil {
-		// Example: If you store user preferences or other context
-		// if userInfo, ok := session.Context["user_info"].(string); ok {
-		//     contextMessages = append(contextMessages, llm.NewSystemMessage(userInfo))
-		// }
+	// Add metadata from trigger if available
+	if trigger, ok := input["trigger"].(map[string]any); ok {
+		if metadata, ok := trigger["metadata"].(map[string]any); ok {
+			// Add relevant metadata as context
+			if language, ok := metadata["language"].(string); ok && language != "" {
+				contextMessages = append(contextMessages,
+					llm.NewSystemMessage(fmt.Sprintf("User language preference: %s", language)))
+			}
+		}
 	}
 
 	return contextMessages

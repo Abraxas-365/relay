@@ -84,7 +84,6 @@ func main() {
 	// Log de componentes registrados
 	log.Printf("📦 Registered services: %v", container.GetServiceNames())
 	log.Printf("📚 Registered repositories: %v", container.GetRepositoryNames())
-	log.Printf("⚡ Registered step executors: %v", container.GetStepExecutorNames())
 
 	// Iniciar servidor en goroutine
 	go func() {
@@ -158,12 +157,11 @@ func setupRoutes(app *fiber.App, c *Container) {
 	// Root endpoint
 	app.Get("/", func(ctx *fiber.Ctx) error {
 		return ctx.JSON(fiber.Map{
-			"message":        "Relay API",
-			"version":        "1.0.0",
-			"status":         "running",
-			"uptime":         time.Since(startTime).String(),
-			"services":       c.GetServiceNames(),
-			"step_executors": c.GetStepExecutorNames(),
+			"message":  "Relay API",
+			"version":  "1.0.0",
+			"status":   "running",
+			"uptime":   time.Since(startTime).String(),
+			"services": c.GetServiceNames(),
 		})
 	})
 
@@ -197,11 +195,10 @@ func setupRoutes(app *fiber.App, c *Container) {
 	if c.Config.Server.Environment == "development" {
 		app.Get("/debug/container", func(ctx *fiber.Ctx) error {
 			return ctx.JSON(fiber.Map{
-				"services":       c.GetServiceNames(),
-				"repositories":   c.GetRepositoryNames(),
-				"step_executors": c.GetStepExecutorNames(),
-				"health":         c.HealthCheck(),
-				"event_metrics":  c.GetEventBusMetrics(),
+				"services":      c.GetServiceNames(),
+				"repositories":  c.GetRepositoryNames(),
+				"health":        c.HealthCheck(),
+				"event_metrics": c.GetEventBusMetrics(),
 			})
 		})
 	}
@@ -245,9 +242,8 @@ func healthCheckHandler(c *Container) fiber.Handler {
 			"services":  health,
 			"version":   "1.0.0",
 			"components": fiber.Map{
-				"services":       c.GetServiceNames(),
-				"repositories":   c.GetRepositoryNames(),
-				"step_executors": c.GetStepExecutorNames(),
+				"services":     c.GetServiceNames(),
+				"repositories": c.GetRepositoryNames(),
 			},
 		})
 	}

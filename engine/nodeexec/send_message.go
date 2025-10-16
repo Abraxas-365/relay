@@ -12,7 +12,6 @@ import (
 	"github.com/Abraxas-365/relay/pkg/kernel"
 )
 
-// SendMessageExecutor sends messages to specific channels
 type SendMessageExecutor struct {
 	channelManager channels.ChannelManager
 }
@@ -36,8 +35,8 @@ func (e *SendMessageExecutor) Execute(ctx context.Context, node engine.WorkflowN
 	}
 
 	// Extract tenant_id
-	tenantIDStr, ok := getStringFromInput(input, "tenant_id")
-	if !ok {
+	tenantIDStr := extractStringFromInput(input, "tenant_id")
+	if tenantIDStr == "" {
 		result.Success = false
 		result.Error = "tenant_id not found in input"
 		result.Duration = time.Since(startTime).Milliseconds()
@@ -45,52 +44,42 @@ func (e *SendMessageExecutor) Execute(ctx context.Context, node engine.WorkflowN
 	}
 	tenantID := kernel.TenantID(tenantIDStr)
 
-	// Extract channel_id - use trigger channel if not specified
+	// Extract channel_id
 	channelIDStr, ok := node.Config["channel_id"].(string)
 	if !ok || channelIDStr == "" {
-		// Use the channel that triggered the workflow
-		channelIDStr, ok = getStringFromInput(input, "channel_id")
-		if !ok {
-			// Try to get from message context
-			if msgMap, ok := input["message"].(map[string]any); ok {
-				if ch, ok := msgMap["channel"].(string); ok {
-					channelIDStr = ch
-				}
+		// Try from trigger data
+		if trigger, ok := input["trigger"].(map[string]any); ok {
+			if chID, ok := trigger["channel_id"].(string); ok {
+				channelIDStr = chID
 			}
 		}
-
 		if channelIDStr == "" {
 			result.Success = false
-			result.Error = "channel_id not found in config or input"
+			result.Error = "channel_id not found in config or trigger"
 			result.Duration = time.Since(startTime).Milliseconds()
 			return result, errx.New("channel_id required", errx.TypeValidation)
 		}
 	}
 	channelID := kernel.ChannelID(channelIDStr)
 
-	// Extract recipient_id - required
+	// Extract recipient_id
 	recipientID, ok := node.Config["recipient_id"].(string)
 	if !ok || recipientID == "" {
-		// Try to get from input (e.g., original sender)
-		recipientID, ok = getStringFromInput(input, "sender_id")
-		if !ok {
-			// Try from message context
-			if msgMap, ok := input["message"].(map[string]any); ok {
-				if sender, ok := msgMap["sender"].(string); ok {
-					recipientID = sender
-				}
+		// Try from trigger
+		if trigger, ok := input["trigger"].(map[string]any); ok {
+			if sender, ok := trigger["sender_id"].(string); ok {
+				recipientID = sender
 			}
 		}
-
 		if recipientID == "" {
 			result.Success = false
-			result.Error = "recipient_id not found in config or input"
+			result.Error = "recipient_id not found"
 			result.Duration = time.Since(startTime).Milliseconds()
 			return result, errx.New("recipient_id required", errx.TypeValidation)
 		}
 	}
 
-	// Extract message content
+	// Extract message text
 	text, ok := node.Config["text"].(string)
 	if !ok || text == "" {
 		result.Success = false
@@ -99,24 +88,51 @@ func (e *SendMessageExecutor) Execute(ctx context.Context, node engine.WorkflowN
 		return result, errx.New("text is required", errx.TypeValidation)
 	}
 
-	// Build message content
 	messageContent := channels.MessageContent{
 		Type: "text",
 		Text: text,
 	}
 
-	// Handle attachments if provided
+	// ✅ FIX: Handle attachments properly
 	if attachments, ok := node.Config["attachments"].([]any); ok {
-		strAttachments := make([]string, 0, len(attachments))
+		parsedAttachments := make([]channels.Attachment, 0, len(attachments))
+
 		for _, att := range attachments {
+			// Option 1: If attachment is a string (URL), convert to Attachment struct
 			if attStr, ok := att.(string); ok {
-				strAttachments = append(strAttachments, attStr)
+				parsedAttachments = append(parsedAttachments, channels.Attachment{
+					Type: "document", // or detect from URL/extension
+					URL:  attStr,
+				})
+			}
+
+			// Option 2: If attachment is already a map/struct
+			if attMap, ok := att.(map[string]any); ok {
+				attachment := channels.Attachment{}
+
+				if attType, ok := attMap["type"].(string); ok {
+					attachment.Type = attType
+				}
+				if url, ok := attMap["url"].(string); ok {
+					attachment.URL = url
+				}
+				if mimeType, ok := attMap["mime_type"].(string); ok {
+					attachment.MimeType = mimeType
+				}
+				if filename, ok := attMap["filename"].(string); ok {
+					attachment.Filename = filename
+				}
+				if caption, ok := attMap["caption"].(string); ok {
+					attachment.Caption = caption
+				}
+
+				parsedAttachments = append(parsedAttachments, attachment)
 			}
 		}
-		messageContent.Attachments = strAttachments
+
+		messageContent.Attachments = parsedAttachments
 	}
 
-	// Build metadata
 	metadata := make(map[string]any)
 	if meta, ok := node.Config["metadata"].(map[string]any); ok {
 		metadata = meta
@@ -125,15 +141,13 @@ func (e *SendMessageExecutor) Execute(ctx context.Context, node engine.WorkflowN
 	metadata["workflow_node_name"] = node.Name
 	metadata["timestamp"] = time.Now().Unix()
 
-	// Create outgoing message
 	outgoingMsg := channels.OutgoingMessage{
 		RecipientID: recipientID,
 		Content:     messageContent,
 		Metadata:    metadata,
 	}
 
-	// Send the message
-	log.Printf("📤 Sending message to recipient %s via channel %s", recipientID, channelID.String())
+	log.Printf("💬 Sending message to %s via channel %s", recipientID, channelID.String())
 	if err := e.channelManager.SendMessage(ctx, tenantID, channelID, outgoingMsg); err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("failed to send message: %v", err)
@@ -141,7 +155,6 @@ func (e *SendMessageExecutor) Execute(ctx context.Context, node engine.WorkflowN
 		return result, errx.Wrap(err, "failed to send message", errx.TypeInternal)
 	}
 
-	// Success
 	result.Success = true
 	result.Output["sent"] = true
 	result.Output["channel_id"] = channelID.String()
@@ -158,22 +171,17 @@ func (e *SendMessageExecutor) SupportsType(nodeType engine.NodeType) bool {
 }
 
 func (e *SendMessageExecutor) ValidateConfig(config map[string]any) error {
-	// text is required
 	if _, ok := config["text"].(string); !ok {
 		return errx.New("text is required for send_message node", errx.TypeValidation)
 	}
-
-	// channel_id and recipient_id are optional (can come from context)
-
 	return nil
 }
 
-// Helper function to extract string from nested input
-func getStringFromInput(input map[string]any, key string) (string, bool) {
+func extractStringFromInput(input map[string]any, key string) string {
 	if val, ok := input[key]; ok {
 		if str, ok := val.(string); ok {
-			return str, true
+			return str
 		}
 	}
-	return "", false
+	return ""
 }

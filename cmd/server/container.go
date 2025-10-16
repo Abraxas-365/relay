@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"time"
 
 	"github.com/Abraxas-365/craftable/ai/llm"
 	"github.com/Abraxas-365/craftable/ai/providers/aiopenai"
@@ -22,9 +21,7 @@ import (
 	"github.com/Abraxas-365/relay/engine"
 	"github.com/Abraxas-365/relay/engine/delayscheduler"
 	"github.com/Abraxas-365/relay/engine/engineinfra"
-	"github.com/Abraxas-365/relay/engine/msgprocessor"
 	"github.com/Abraxas-365/relay/engine/nodeexec"
-	"github.com/Abraxas-365/relay/engine/sessmanager"
 	"github.com/Abraxas-365/relay/engine/workflowexec"
 
 	"github.com/Abraxas-365/relay/iam"
@@ -39,12 +36,6 @@ import (
 	"github.com/Abraxas-365/relay/iam/user"
 	"github.com/Abraxas-365/relay/iam/user/userinfra"
 	"github.com/Abraxas-365/relay/iam/user/usersrv"
-
-	"github.com/Abraxas-365/relay/parser"
-	"github.com/Abraxas-365/relay/parser/parserengines"
-	"github.com/Abraxas-365/relay/parser/parserinfra"
-
-	"github.com/Abraxas-365/relay/tool"
 
 	"github.com/Abraxas-365/relay/pkg/agent"
 	"github.com/Abraxas-365/relay/pkg/agent/agentinfra"
@@ -105,7 +96,7 @@ type Container struct {
 	AgentChatRepo agent.AgentChatRepository
 
 	// =================================================================
-	// CHANNELS
+	// CHANNELS (Optional integration)
 	// =================================================================
 	ChannelRepo    channels.ChannelRepository
 	ChannelManager channels.ChannelManager
@@ -120,41 +111,20 @@ type Container struct {
 	WhatsAppWebhookRoutes  *whatsapp.WebhookRoutes
 
 	// =================================================================
-	// ENGINE
+	// ENGINE (n8n-style)
 	// =================================================================
-	MessageRepo         engine.MessageRepository
 	WorkflowRepo        engine.WorkflowRepository
-	EngineSessionRepo   engine.SessionRepository
-	SessionManager      engine.SessionManager
 	WorkflowExecutor    engine.WorkflowExecutor
-	MessageProcessor    engine.MessageProcessor
 	ExpressionEvaluator engine.ExpressionEvaluator
-	DelayScheduler      engine.DelayScheduler // ✅ NEW: Delay Scheduler
+	DelayScheduler      engine.DelayScheduler
 
-	// Step Executors
-	ActionExecutor    engine.NodeExecutor
-	ConditionExecutor engine.NodeExecutor
-	ResponseExecutor  engine.NodeExecutor
-	DelayExecutor     engine.NodeExecutor
-
-	// =================================================================
-	// PARSER 🔍
-	// =================================================================
-	ParserRepo    parser.ParserRepository
-	ParserManager *parser.ParserManager
-
-	// Parser Engines
-	RegexParserEngine   parser.ParserEngine
-	AIParserEngine      parser.ParserEngine
-	RuleParserEngine    parser.ParserEngine
-	KeywordParserEngine parser.ParserEngine
-	NLPParserEngine     parser.ParserEngine
-
-	// =================================================================
-	// TOOL 🛠️
-	// =================================================================
-	ToolRepo     tool.ToolRepository
-	ToolExecutor tool.ToolExecutor
+	// Node Executors
+	ActionExecutor      engine.NodeExecutor
+	ConditionExecutor   engine.NodeExecutor
+	DelayExecutor       engine.NodeExecutor
+	AIAgentExecutor     engine.NodeExecutor
+	SendMessageExecutor engine.NodeExecutor
+	HTTPExecutor        engine.NodeExecutor
 
 	// =================================================================
 	// AI/LLM 🤖
@@ -177,12 +147,10 @@ func NewContainer(cfg *config.Config, db *sqlx.DB, redisClient *redis.Client) *C
 	c.initIAMRepositories()
 	c.initIAMServices()
 	c.initAuthServices()
-	c.initAgentComponents()   // 🤖 Agent components (needed by AI parser)
-	c.initLLMComponents()     // LLM (needed by AI parser)
-	c.initParserComponents()  // Parser before engine
-	c.initToolComponents()    // Tools before engine
-	c.initChannelComponents() // ⚡ Channels BEFORE engine
-	c.initEngineComponents()  // ⚙️ Engine AFTER channels (can use ChannelManager)
+	c.initAgentComponents()   // 🤖 Agent components (needed by AI executor)
+	c.initLLMComponents()     // LLM (needed by AI executor)
+	c.initChannelComponents() // ⚡ Channels (optional integration)
+	c.initEngineComponents()  // ⚙️ Engine components
 
 	log.Println("✅ Dependency container initialized successfully")
 
@@ -321,7 +289,7 @@ func (c *Container) initLLMComponents() {
 
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
-		log.Println("  ⚠️  OPENAI_API_KEY not set, AI parser will be disabled")
+		log.Println("  ⚠️  OPENAI_API_KEY not set, AI features will be disabled")
 		return
 	}
 
@@ -332,89 +300,17 @@ func (c *Container) initLLMComponents() {
 }
 
 // =================================================================
-// PARSER INITIALIZATION 🔍
-// =================================================================
-
-func (c *Container) initParserComponents() {
-	log.Println("  🔍 Initializing parser components...")
-
-	c.ParserRepo = parserinfra.NewPostgresParserRepository(c.DB)
-	log.Println("    ✅ ParserRepo initialized")
-
-	// Initialize parser engines
-	c.RegexParserEngine = parserengines.NewRegexParserEngine()
-	log.Println("    ✅ Regex parser engine initialized")
-
-	// Initialize AI parser engine with AgentChatRepo
-	c.AIParserEngine = parserengines.NewAIParserEngine(c.AgentChatRepo)
-	log.Println("    ✅ AI parser engine initialized with agent support")
-
-	// TODO: Initialize other parser engines
-	// c.RuleParserEngine = parserengines.NewRuleParserEngine()
-	// log.Println("    ✅ Rule parser engine initialized")
-	//
-	// c.KeywordParserEngine = parserengines.NewKeywordParserEngine()
-	// log.Println("    ✅ Keyword parser engine initialized")
-
-	// NLP parser requires additional dependencies
-	log.Println("    ⚠️  NLP parser engine not initialized (pending implementation)")
-
-	// Initialize ParserManager
-	c.ParserManager = parser.NewParserManager(c.ParserRepo)
-
-	// Register parser engines
-	c.ParserManager.RegisterEngine(parser.ParserTypeRegex, c.RegexParserEngine)
-	log.Println("    ✅ Registered Regex parser engine")
-
-	if c.AIParserEngine != nil {
-		c.ParserManager.RegisterEngine(parser.ParserTypeAI, c.AIParserEngine)
-		log.Println("    ✅ Registered AI parser engine")
-	}
-
-	if c.RuleParserEngine != nil {
-		c.ParserManager.RegisterEngine(parser.ParserTypeRule, c.RuleParserEngine)
-		log.Println("    ✅ Registered Rule parser engine")
-	}
-
-	if c.KeywordParserEngine != nil {
-		c.ParserManager.RegisterEngine(parser.ParserTypeKeyword, c.KeywordParserEngine)
-		log.Println("    ✅ Registered Keyword parser engine")
-	}
-
-	if c.NLPParserEngine != nil {
-		c.ParserManager.RegisterEngine(parser.ParserTypeNLP, c.NLPParserEngine)
-		log.Println("    ✅ Registered NLP parser engine")
-	}
-
-	log.Println("  ✅ Parser components initialized")
-}
-
-// =================================================================
-// TOOL INITIALIZATION 🛠️
-// =================================================================
-
-func (c *Container) initToolComponents() {
-	log.Println("  🛠️ Initializing tool components...")
-
-	// TODO: Initialize ToolRepo and ToolExecutor
-	// c.ToolRepo = toolinfra.NewPostgresToolRepository(c.DB)
-	// c.ToolExecutor = toolsrv.NewToolExecutor(...)
-
-	log.Println("  ⚠️  Tool components not initialized (pending implementation)")
-}
-
-// =================================================================
-// CHANNELS INITIALIZATION 📡 (BEFORE ENGINE)
+// CHANNELS INITIALIZATION 📡 (Optional Integration)
 // =================================================================
 
 func (c *Container) initChannelComponents() {
-	log.Println("  📡 Initializing channel components...")
+	log.Println("  📡 Initializing channel components (optional)...")
 
 	// Initialize channel repository
 	c.ChannelRepo = channelsinfra.NewPostgresChannelRepository(c.DB)
 	log.Println("    ✅ Channel repository initialized")
 
-	// Initialize the channel manager FIRST
+	// Initialize the channel manager
 	c.ChannelManager = channelmanager.NewDefaultChannelManager(c.ChannelRepo, c.RedisClient)
 	log.Println("    ✅ Channel manager initialized")
 
@@ -436,30 +332,21 @@ func (c *Container) initChannelComponents() {
 }
 
 // =================================================================
-// ENGINE INITIALIZATION ⚙️ (AFTER CHANNELS)
+// ENGINE INITIALIZATION ⚙️ (n8n-style)
 // =================================================================
 
 func (c *Container) initEngineComponents() {
-	log.Println("  ⚙️  Initializing engine components...")
+	log.Println("  ⚙️  Initializing engine components (n8n-style)...")
 
-	// Initialize repositories
-	c.MessageRepo = engineinfra.NewPostgresMessageRepository(c.DB)
+	// Initialize workflow repository
 	c.WorkflowRepo = engineinfra.NewPostgresWorkflowRepository(c.DB)
-	c.EngineSessionRepo = engineinfra.NewPostgresSessionRepository(c.DB)
-
-	// Initialize session manager
-	sessionConfig := &sessmanager.SessionManagerConfig{
-		DefaultExpirationTime: 10,
-		MaxHistorySize:        100,
-	}
-	c.SessionManager = sessmanager.NewSessionManager(c.EngineSessionRepo, sessionConfig)
-	log.Println("    ✅ Session manager initialized")
+	log.Println("    ✅ Workflow repository initialized")
 
 	// Initialize expression evaluator
 	c.ExpressionEvaluator = engine.NewCelEvaluator()
 	log.Println("    ✅ Expression evaluator initialized")
 
-	// ✅ NEW: Initialize delay scheduler with continuation handler
+	// ⏰ Initialize delay scheduler with continuation handler
 	c.DelayScheduler = delayscheduler.NewRedisDelayScheduler(
 		c.RedisClient,
 		c.handleWorkflowContinuation,
@@ -471,57 +358,46 @@ func (c *Container) initEngineComponents() {
 	c.DelayScheduler.StartWorker(ctx)
 	log.Println("    ✅ Delay scheduler worker started")
 
-	// Initialize step executors
+	// Initialize node executors
 	c.ActionExecutor = nodeexec.NewActionExecutor()
 	c.ConditionExecutor = nodeexec.NewConditionExecutor()
-	c.DelayExecutor = nodeexec.NewDelayExecutor(c.DelayScheduler) // ✅ Pass scheduler
-	log.Println("    ✅ Step executors initialized")
+	c.DelayExecutor = nodeexec.NewDelayExecutor(c.DelayScheduler)
+	c.AIAgentExecutor = nodeexec.NewAIAgentExecutor(c.AgentChatRepo)
+	c.SendMessageExecutor = nodeexec.NewSendMessageExecutor(c.ChannelManager)
+	// c.HTTPExecutor = nodeexec.NewHTTPExecutor() // TODO: Add HTTP executor
+	log.Println("    ✅ Node executors initialized")
 
-	// Initialize workflow executor with ExpressionEvaluator
+	// Initialize workflow executor (n8n-style)
 	c.WorkflowExecutor = workflowexec.NewDefaultWorkflowExecutor(
-		c.ParserManager,
-		c.ChannelManager,
 		c.ExpressionEvaluator,
 		c.ActionExecutor,
 		c.ConditionExecutor,
-		c.ResponseExecutor,
 		c.DelayExecutor,
+		c.AIAgentExecutor,
+		c.SendMessageExecutor,
+		// c.HTTPExecutor,
 	)
-	log.Println("    ✅ Workflow executor initialized with parser manager and expression evaluator")
+	log.Println("    ✅ Workflow executor initialized (n8n-style)")
 
-	// ⚡ Initialize message processor WITH ChannelManager
-	c.MessageProcessor = msgprocessor.NewMessageProcessor(
-		c.MessageRepo,
-		c.WorkflowRepo,
-		c.SessionManager,
-		c.WorkflowExecutor,
-		c.ChannelManager, // ChannelManager already exists!
-	)
-	log.Println("    ✅ Message processor initialized with ChannelManager")
+	// Initialize channel webhook handler (for channel trigger workflows)
+	if c.ChannelRepo != nil && c.WhatsAppAdapter != nil {
+		c.WhatsAppWebhookHandler = whatsapp.NewWebhookHandler(
+			c.ChannelRepo,
+			c.WhatsAppAdapter,
+		)
+		log.Println("    ✅ WhatsApp webhook handler initialized")
 
-	// Initialize channel API handler (needs MessageProcessor)
-	c.ChannelHandler = channelapi.NewChannelHandler(c.MessageProcessor)
-	log.Println("    ✅ Channel API handler initialized")
-
-	// Initialize WhatsApp webhook handler
-	c.WhatsAppWebhookHandler = whatsapp.NewWebhookHandler(
-		c.ChannelRepo,
-		c.WhatsAppAdapter,
-	)
-	log.Println("    ✅ WhatsApp webhook handler initialized")
-
-	// Initialize WhatsApp webhook routes (will be setup in main.go)
-	c.WhatsAppWebhookRoutes = whatsapp.NewWebhookRoutes(
-		c.WhatsAppWebhookHandler,
-		c.ChannelHandler.ProcessIncomingMessage,
-	)
-	log.Println("    ✅ WhatsApp webhook routes initialized")
+		// Initialize channel API handler
+		// This would trigger workflows when messages arrive
+		// c.ChannelHandler = channelapi.NewChannelHandler(c.WorkflowExecutor)
+		// log.Println("    ✅ Channel API handler initialized")
+	}
 
 	log.Println("  ✅ Engine components initialized")
 }
 
 // =================================================================
-// WORKFLOW CONTINUATION HANDLER
+// WORKFLOW CONTINUATION HANDLER ⏰
 // =================================================================
 
 // handleWorkflowContinuation is called when a delayed execution is ready
@@ -529,27 +405,8 @@ func (c *Container) handleWorkflowContinuation(
 	ctx context.Context,
 	continuation *engine.WorkflowContinuation,
 ) error {
-	log.Printf("🔄 Resuming workflow %s from step %s",
-		continuation.WorkflowID, continuation.NodeID)
-
-	// Get session
-	session, err := c.SessionManager.Get(ctx, kernel.SessionID(continuation.SessionID))
-	if err != nil {
-		return fmt.Errorf("failed to get session: %w", err)
-	}
-
-	// Reconstruct message from continuation context
-	message := engine.Message{
-		ID:        kernel.MessageID(continuation.MessageID),
-		TenantID:  kernel.TenantID(continuation.TenantID),
-		ChannelID: kernel.ChannelID(continuation.ChannelID),
-		SenderID:  continuation.SenderID,
-		Content: engine.MessageContent{
-			Text: fmt.Sprintf("Resuming after delay from step %s", continuation.NodeID),
-			Type: engine.MessageTypeText,
-		},
-		Context: continuation.NodeContext,
-	}
+	log.Printf("🔄 Resuming workflow %s from node %s",
+		continuation.WorkflowID, continuation.NextNodeID)
 
 	// Get workflow
 	workflow, err := c.WorkflowRepo.FindByID(ctx, kernel.WorkflowID(continuation.WorkflowID))
@@ -557,21 +414,29 @@ func (c *Container) handleWorkflowContinuation(
 		return fmt.Errorf("failed to get workflow: %w", err)
 	}
 
-	// ✅ Resume from next step (not re-execute entire workflow!)
+	// Prepare workflow input from saved context
+	input := engine.WorkflowInput{
+		TriggerData: continuation.NodeContext,
+		TenantID:    kernel.TenantID(continuation.TenantID),
+		Metadata: map[string]any{
+			"resumed_from_delay": true,
+			"original_node_id":   continuation.NodeID,
+			"continuation_id":    continuation.ID,
+		},
+	}
+
+	// Resume workflow from next node
 	var result *engine.ExecutionResult
 	if continuation.NextNodeID != "" {
-		// Resume from the next step with saved context
 		result, err = c.WorkflowExecutor.ResumeFromNode(
 			ctx,
 			*workflow,
-			message,
-			session,
+			input,
 			continuation.NextNodeID,
 			continuation.NodeContext,
 		)
 	} else {
-		// No next step, workflow is complete
-		log.Printf("✅ Workflow %s completed (no next step after delay)", workflow.ID.String())
+		log.Printf("✅ Workflow %s completed (no next node after delay)", workflow.ID.String())
 		return nil
 	}
 
@@ -579,24 +444,7 @@ func (c *Container) handleWorkflowContinuation(
 		return fmt.Errorf("failed to resume workflow: %w", err)
 	}
 
-	log.Printf("✅ Workflow resumed successfully: success=%v, response=%s",
-		result.Success, result.Response)
-
-	// Update session with result
-	if result.Context != nil {
-		for key, value := range result.Context {
-			session.SetContext(key, value)
-		}
-	}
-	if result.NextState != "" {
-		session.UpdateState(result.NextState)
-	}
-	session.ExtendExpiration(30 * time.Minute)
-	if err := c.SessionManager.Update(ctx, *session); err != nil {
-		log.Printf("⚠️  Failed to update session: %v", err)
-	}
-
-	// Send response if needed
+	log.Printf("✅ Workflow resumed successfully: success=%v", result.Success)
 
 	return nil
 }
@@ -608,9 +456,23 @@ func (c *Container) handleWorkflowContinuation(
 func (c *Container) GetAllRoutes() []RouteGroup {
 	routes := []RouteGroup{
 		{Name: "auth", Handler: c.AuthHandlers},
-		{Name: "whatsapp_webhook", Handler: c.WhatsAppWebhookHandler},
-		{Name: "channel_api", Handler: c.ChannelHandler},
 	}
+
+	// Add channel routes if available
+	if c.WhatsAppWebhookHandler != nil {
+		routes = append(routes, RouteGroup{
+			Name:    "whatsapp_webhook",
+			Handler: c.WhatsAppWebhookHandler,
+		})
+	}
+
+	if c.ChannelHandler != nil {
+		routes = append(routes, RouteGroup{
+			Name:    "channel_api",
+			Handler: c.ChannelHandler,
+		})
+	}
+
 	return routes
 }
 
@@ -622,7 +484,7 @@ type RouteGroup struct {
 func (c *Container) Cleanup() {
 	log.Println("🧹 Cleaning up container resources...")
 
-	// ✅ NEW: Stop delay scheduler worker
+	// Stop delay scheduler worker
 	if c.DelayScheduler != nil {
 		log.Println("  ⏰ Stopping delay scheduler...")
 		c.DelayScheduler.StopWorker()
@@ -672,13 +534,11 @@ func (c *Container) HealthCheck() map[string]bool {
 		health["event_bus"] = false
 	}
 
-	health["parser_manager"] = c.ParserManager != nil
 	health["workflow_executor"] = c.WorkflowExecutor != nil
-	health["message_processor"] = c.MessageProcessor != nil
 	health["channel_manager"] = c.ChannelManager != nil
 	health["whatsapp_adapter"] = c.WhatsAppAdapter != nil
 	health["agent_chat_repo"] = c.AgentChatRepo != nil
-	health["delay_scheduler"] = c.DelayScheduler != nil // ✅ NEW
+	health["delay_scheduler"] = c.DelayScheduler != nil
 
 	return health
 }
@@ -696,13 +556,10 @@ func (c *Container) GetServiceNames() []string {
 		"TenantService",
 		"RoleService",
 		"ChannelService",
-		"SessionManager",
 		"WorkflowExecutor",
-		"MessageProcessor",
-		"ParserManager",
 		"EventBus",
 		"AgentChatRepo",
-		"DelayScheduler", // ✅ NEW
+		"DelayScheduler",
 	}
 }
 
@@ -712,42 +569,20 @@ func (c *Container) GetRepositoryNames() []string {
 		"TenantRepo",
 		"RoleRepo",
 		"ChannelRepo",
-		"MessageRepo",
 		"WorkflowRepo",
-		"EngineSessionRepo",
-		"ParserRepo",
-		"ToolRepo",
 		"AgentChatRepo",
 	}
 }
 
-func (c *Container) GetStepExecutorNames() []string {
+func (c *Container) GetNodeExecutorNames() []string {
 	return []string{
 		"ActionExecutor",
 		"ConditionExecutor",
-		"ResponseExecutor",
 		"DelayExecutor",
+		"AIAgentExecutor",
+		"SendMessageExecutor",
+		"HTTPExecutor",
 	}
-}
-
-func (c *Container) GetParserEngineNames() []string {
-	engines := []string{}
-	if c.RegexParserEngine != nil {
-		engines = append(engines, "RegexParserEngine")
-	}
-	if c.AIParserEngine != nil {
-		engines = append(engines, "AIParserEngine")
-	}
-	if c.RuleParserEngine != nil {
-		engines = append(engines, "RuleParserEngine")
-	}
-	if c.KeywordParserEngine != nil {
-		engines = append(engines, "KeywordParserEngine")
-	}
-	if c.NLPParserEngine != nil {
-		engines = append(engines, "NLPParserEngine")
-	}
-	return engines
 }
 
 func (c *Container) GetChannelAdapterNames() []string {
@@ -755,11 +590,10 @@ func (c *Container) GetChannelAdapterNames() []string {
 	if c.WhatsAppAdapter != nil {
 		adapters = append(adapters, "WhatsAppAdapter")
 	}
-	// TODO: Add other adapters
 	return adapters
 }
 
-// ✅ NEW: Get delay scheduler metrics
+// Get delay scheduler metrics
 func (c *Container) GetDelaySchedulerMetrics(ctx context.Context) (int64, error) {
 	if c.DelayScheduler != nil {
 		return c.DelayScheduler.GetPendingCount(ctx)
