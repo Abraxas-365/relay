@@ -23,8 +23,8 @@ import (
 	"github.com/Abraxas-365/relay/engine/delayscheduler"
 	"github.com/Abraxas-365/relay/engine/engineinfra"
 	"github.com/Abraxas-365/relay/engine/msgprocessor"
+	"github.com/Abraxas-365/relay/engine/nodeexec"
 	"github.com/Abraxas-365/relay/engine/sessmanager"
-	"github.com/Abraxas-365/relay/engine/stepexec"
 	"github.com/Abraxas-365/relay/engine/workflowexec"
 
 	"github.com/Abraxas-365/relay/iam"
@@ -472,10 +472,10 @@ func (c *Container) initEngineComponents() {
 	log.Println("    ✅ Delay scheduler worker started")
 
 	// Initialize step executors
-	c.ActionExecutor = stepexec.NewActionExecutor()
-	c.ConditionExecutor = stepexec.NewConditionExecutor()
-	c.ResponseExecutor = stepexec.NewResponseExecutor()
-	c.DelayExecutor = stepexec.NewDelayExecutor(c.DelayScheduler) // ✅ Pass scheduler
+	c.ActionExecutor = nodeexec.NewActionExecutor()
+	c.ConditionExecutor = nodeexec.NewConditionExecutor()
+	c.ResponseExecutor = nodeexec.NewResponseExecutor()
+	c.DelayExecutor = nodeexec.NewDelayExecutor(c.DelayScheduler) // ✅ Pass scheduler
 	log.Println("    ✅ Step executors initialized")
 
 	// Initialize workflow executor with ExpressionEvaluator
