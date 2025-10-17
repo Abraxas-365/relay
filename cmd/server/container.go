@@ -127,6 +127,10 @@ type Container struct {
 	AIAgentExecutor     engine.NodeExecutor
 	SendMessageExecutor engine.NodeExecutor
 	HTTPExecutor        engine.NodeExecutor
+	TransformExecutor   engine.NodeExecutor
+	SwitchExecutor      engine.NodeExecutor
+	LoopExecutor        engine.NodeExecutor
+	ValidateExecutor    engine.NodeExecutor
 
 	// =================================================================
 	// AI/LLM 🤖
@@ -366,7 +370,12 @@ func (c *Container) initEngineComponents() {
 	c.DelayExecutor = nodeexec.NewDelayExecutor(c.DelayScheduler)
 	c.AIAgentExecutor = nodeexec.NewAIAgentExecutor(c.AgentChatRepo)
 	c.SendMessageExecutor = nodeexec.NewSendMessageExecutor(c.ChannelManager)
-	// c.HTTPExecutor = nodeexec.NewHTTPExecutor() // TODO: Add HTTP executor
+	c.HTTPExecutor = nodeexec.NewHTTPExecutor()
+	c.TransformExecutor = nodeexec.NewTransformExecutor(c.ExpressionEvaluator)
+	c.SwitchExecutor = nodeexec.NewSwitchExecutor()
+	c.LoopExecutor = nodeexec.NewLoopExecutor()
+	c.ValidateExecutor = nodeexec.NewValidateExecutor()
+
 	log.Println("    ✅ Node executors initialized")
 
 	// Initialize workflow executor (n8n-style)
@@ -377,7 +386,11 @@ func (c *Container) initEngineComponents() {
 		c.DelayExecutor,
 		c.AIAgentExecutor,
 		c.SendMessageExecutor,
-		// c.HTTPExecutor,
+		c.HTTPExecutor,
+		c.TransformExecutor,
+		c.SwitchExecutor,
+		c.LoopExecutor,
+		c.ValidateExecutor,
 	)
 	log.Println("    ✅ Workflow executor initialized (n8n-style)")
 
