@@ -21,7 +21,7 @@ import (
 
 const (
 	whatsappAPIBaseURL = "https://graph.facebook.com"
-	defaultAPIVersion  = "v18.0"
+	defaultAPIVersion  = "v24.0"
 )
 
 // WhatsAppAdapter implements ChannelAdapter for WhatsApp Business API
@@ -57,11 +57,8 @@ func (a *WhatsAppAdapter) SendMessage(ctx context.Context, msg channels.Outgoing
 	// Build WhatsApp API payload
 	payload := a.buildMessagePayload(msg)
 
-	// Build URL with phone_number_id
-	url := fmt.Sprintf("https://graph.facebook.com/%s/%s/messages",
-		a.config.APIVersion,
-		a.config.PhoneNumberID,
-	)
+	// Build URL using the pre-configured apiURL
+	url := fmt.Sprintf("%s/messages", a.apiURL)
 
 	// ✅ LOG THE ACTUAL URL BEING CALLED
 	log.Printf("🌐 WhatsApp API URL: %s", url)
@@ -167,10 +164,16 @@ func (a *WhatsAppAdapter) TestConnection(ctx context.Context, config channels.Ch
 		return channels.ErrInvalidChannelConfig()
 	}
 
+	// Use configured API version or default
+	apiVersion := whatsappConfig.APIVersion
+	if apiVersion == "" {
+		apiVersion = defaultAPIVersion
+	}
+
 	// Test by fetching phone number info
 	url := fmt.Sprintf("%s/%s/%s",
 		whatsappAPIBaseURL,
-		whatsappConfig.APIVersion,
+		apiVersion,
 		whatsappConfig.PhoneNumberID,
 	)
 

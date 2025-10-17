@@ -89,7 +89,7 @@ type WhatsAppConfig struct {
 	AccessToken        string `json:"access_token"`
 	AppSecret          string `json:"app_secret,omitempty"`
 	WebhookVerifyToken string `json:"webhook_verify_token"`
-	APIVersion         string `json:"api_version,omitempty"` // v17.0, v18.0
+	APIVersion         string `json:"api_version,omitempty"` // v24.0
 
 	// Buffer configuration
 	BufferEnabled        bool `json:"buffer_enabled,omitempty"`          // Enable message buffering
@@ -167,6 +167,11 @@ type InstagramConfig struct {
 	PageToken   string `json:"page_token"`
 	AppSecret   string `json:"app_secret"`
 	VerifyToken string `json:"verify_token"`
+
+	// Buffer configuration
+	BufferEnabled        bool `json:"buffer_enabled,omitempty"`          // Enable message buffering
+	BufferTimeSeconds    int  `json:"buffer_time_seconds,omitempty"`     // Time window to buffer messages (e.g., 5 seconds)
+	BufferResetOnMessage bool `json:"buffer_reset_on_message,omitempty"` // Reset timer on each new message
 }
 
 func (c InstagramConfig) Validate() error {
@@ -176,6 +181,17 @@ func (c InstagramConfig) Validate() error {
 	if c.PageToken == "" {
 		return ErrInvalidChannelConfig().WithDetail("reason", "page_token is required")
 	}
+
+	// Validate buffer config
+	if c.BufferEnabled {
+		if c.BufferTimeSeconds <= 0 {
+			c.BufferTimeSeconds = 5 // Default 5 seconds
+		}
+		if c.BufferTimeSeconds > 60 {
+			return ErrInvalidChannelConfig().WithDetail("reason", "buffer_time_seconds cannot exceed 60 seconds")
+		}
+	}
+
 	return nil
 }
 

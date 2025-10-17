@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/Abraxas-365/relay/channels"
+	instagram "github.com/Abraxas-365/relay/channels/channeladapters/instagram"
 	whatsapp "github.com/Abraxas-365/relay/channels/channeladapters/whatssapp"
 	"github.com/Abraxas-365/relay/pkg/kernel"
 	"github.com/go-redis/redis/v8"
@@ -101,6 +102,39 @@ func (cm *DefaultChannelManager) createAdapterForChannel(channel channels.Channe
 		adapter := whatsapp.NewWhatsAppAdapter(whatsappConfig, cm.redisClient)
 		if adapter == nil {
 			return nil, fmt.Errorf("failed to create WhatsApp adapter")
+		}
+
+		return adapter, nil
+
+	case channels.ChannelTypeInstagram:
+		// Obtener config tipada
+		config, err := channel.GetConfigStruct()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get config struct: %w", err)
+		}
+
+		instagramConfig, ok := config.(channels.InstagramConfig)
+		if !ok {
+			return nil, fmt.Errorf("invalid Instagram config type")
+		}
+
+		// Validar config
+		if err := instagramConfig.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid Instagram config: %w", err)
+		}
+
+		// Log config details
+		log.Printf("🔧 Creating Instagram adapter for channel: %s", channel.ID)
+		log.Printf("   📱 Page ID: %s", instagramConfig.PageID)
+		log.Printf("   🏢 Provider: %s", instagramConfig.Provider)
+		log.Printf("   🔑 Page Token: %s... (%d chars)",
+			safeSubstring(instagramConfig.PageToken, 20),
+			len(instagramConfig.PageToken))
+
+		// Crear adapter with Redis client for buffering
+		adapter := instagram.NewInstagramAdapter(instagramConfig, cm.redisClient)
+		if adapter == nil {
+			return nil, fmt.Errorf("failed to create Instagram adapter")
 		}
 
 		return adapter, nil
