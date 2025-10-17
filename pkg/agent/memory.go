@@ -2,95 +2,91 @@ package agent
 
 import (
 	"context"
-	"fmt"
+	"log"
 
 	"github.com/Abraxas-365/craftable/ai/llm"
-	"github.com/Abraxas-365/craftable/ai/llm/memoryx"
 	"github.com/Abraxas-365/relay/pkg/kernel"
 )
 
-// sessionMemoryImpl implements the SessionMemory interface
-type sessionMemoryImpl struct {
-	sessionID       kernel.SessionID
-	systemPrompt    string
-	repository      AgentChatRepository
-	ctx             context.Context
-	contextMessages []llm.Message
+type SessionMemory struct {
+	ctx            context.Context
+	tenantID       kernel.TenantID
+	sessionID      kernel.SessionID
+	systemPrompt   string
+	contextMsgs    []llm.Message
+	repo           AgentChatRepository
+	cachedMessages []llm.Message
 }
 
-// NewSessionMemory creates a new SessionMemory instance
 func NewSessionMemory(
 	ctx context.Context,
+	tenantID kernel.TenantID,
 	sessionID kernel.SessionID,
 	systemPrompt string,
-	contexMessages []llm.Message,
-	repository AgentChatRepository) memoryx.Memory {
-	return &sessionMemoryImpl{
-		sessionID:       sessionID,
-		systemPrompt:    systemPrompt,
-		repository:      repository,
-		ctx:             ctx,
-		contextMessages: contexMessages,
+	contextMessages []llm.Message,
+	repo AgentChatRepository,
+) *SessionMemory {
+	return &SessionMemory{
+		ctx:          ctx,
+		tenantID:     tenantID,
+		sessionID:    sessionID,
+		systemPrompt: systemPrompt,
+		contextMsgs:  contextMessages,
+		repo:         repo,
 	}
 }
 
-func (sm *sessionMemoryImpl) Messages() ([]llm.Message, error) {
-	// Get all messages for the session
-	messages, err := sm.repository.GetAllMessagesBySession(sm.ctx, sm.sessionID)
+func (m *SessionMemory) Messages() ([]llm.Message, error) {
+	if m.cachedMessages != nil {
+		return m.cachedMessages, nil
+	}
+
+	messages := []llm.Message{}
+
+	if m.systemPrompt != "" {
+		messages = append(messages, llm.NewSystemMessage(m.systemPrompt))
+	}
+
+	if len(m.contextMsgs) > 0 {
+		messages = append(messages, m.contextMsgs...)
+	}
+
+	storedMessages, err := m.repo.GetAllMessagesBySession(m.ctx, m.sessionID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get session messages: %w", err)
+		log.Printf("⚠️  Failed to load stored messages: %v", err)
+		m.cachedMessages = messages
+		return messages, nil
 	}
 
-	// Convert to LLM messages
-	llmMessages := ToLLMMessages(messages)
-
-	if len(sm.contextMessages) > 0 {
-		llmMessages = append(llmMessages, sm.contextMessages...)
-	}
-	if sm.systemPrompt != "" {
-		systemMsg := llm.NewSystemMessage(sm.systemPrompt)
-		llmMessages = append([]llm.Message{systemMsg}, llmMessages...)
-	}
-
-	return llmMessages, nil
-}
-
-func (sm *sessionMemoryImpl) Add(message llm.Message) error {
-
-	if message.Role == llm.RoleTool {
-
-		// VALIDATE: Tool messages must have a ToolCallID
-		if message.ToolCallID == "" {
-			return fmt.Errorf("tool message must have a tool_call_id")
+	for _, msg := range storedMessages {
+		llmMsg := convertAgentMessageToLLM(&msg)
+		if llmMsg != nil {
+			messages = append(messages, *llmMsg)
 		}
 	}
+
+	m.cachedMessages = messages
+	return messages, nil
+}
+
+func (m *SessionMemory) Add(msg llm.Message) error {
+	m.cachedMessages = nil
 
 	req := CreateMessageRequest{
-		SessionID: sm.sessionID,
-		Role:      message.Role,
-		Content:   &message.Content,
-		Name:      &message.Name,
-		Metadata:  message.Metadata,
+		TenantID:  m.tenantID,
+		SessionID: m.sessionID,
+		Role:      msg.Role,
+		Content:   &msg.Content,
 	}
 
-	// CRITICAL: Ensure ToolCallID is set for tool messages
-	if message.Role == llm.RoleTool && message.ToolCallID != "" {
-		req.ToolCallID = &message.ToolCallID
+	if msg.Name != "" {
+		req.Name = &msg.Name
 	}
 
-	// Handle function call
-	if message.FunctionCall != nil {
-		req.FunctionCall = map[string]any{
-			"name":      message.FunctionCall.Name,
-			"arguments": message.FunctionCall.Arguments,
-		}
-	}
-
-	// Handle tool calls (only for assistant messages)
-	if len(message.ToolCalls) > 0 {
-
-		toolCalls := make([]map[string]any, len(message.ToolCalls))
-		for i, tc := range message.ToolCalls {
+	// ✅ FIX: Properly convert tool calls from llm.ToolCall to map[string]any
+	if len(msg.ToolCalls) > 0 {
+		toolCalls := make([]map[string]any, len(msg.ToolCalls))
+		for i, tc := range msg.ToolCalls {
 			toolCalls[i] = map[string]any{
 				"id":   tc.ID,
 				"type": tc.Type,
@@ -103,22 +99,99 @@ func (sm *sessionMemoryImpl) Add(message llm.Message) error {
 		req.ToolCalls = toolCalls
 	}
 
-	// Create the message
-	_, err := sm.repository.CreateMessage(sm.ctx, req)
-	if err != nil {
-		return fmt.Errorf("failed to add message to session: %w", err)
+	// ✅ FIX: Properly convert function call from llm.FunctionCall to map[string]any
+	if msg.FunctionCall != nil {
+		req.FunctionCall = map[string]any{
+			"name":      msg.FunctionCall.Name,
+			"arguments": msg.FunctionCall.Arguments,
+		}
 	}
 
-	return nil
+	if msg.ToolCallID != "" {
+		req.ToolCallID = &msg.ToolCallID
+	}
+
+	_, err := m.repo.CreateMessage(m.ctx, req)
+	return err
 }
 
-// Clear resets the conversation but keeps the system prompt
-func (sm *sessionMemoryImpl) Clear() error {
-	// Clear all messages except system messages
-	err := sm.repository.ClearSessionMessages(sm.ctx, sm.sessionID, true)
-	if err != nil {
-		return fmt.Errorf("failed to clear session messages: %w", err)
+func (m *SessionMemory) Clear() error {
+	m.cachedMessages = nil
+	return m.repo.ClearSessionMessages(m.ctx, m.sessionID, true)
+}
+
+// ✅ FIX: Properly convert map[string]any to llm.FunctionCall and llm.ToolCall
+func convertAgentMessageToLLM(msg *AgentMessage) *llm.Message {
+	if msg == nil {
+		return nil
 	}
 
-	return nil
+	llmMsg := &llm.Message{
+		Role: msg.Role,
+	}
+
+	if msg.Content != nil {
+		llmMsg.Content = *msg.Content
+	}
+
+	if msg.Name != nil {
+		llmMsg.Name = *msg.Name
+	}
+
+	if msg.ToolCallID != nil {
+		llmMsg.ToolCallID = *msg.ToolCallID
+	}
+
+	// ✅ FIX: Convert tool calls from map[string]any to llm.ToolCall
+	if msg.ToolCalls != nil {
+		toolCalls := make([]llm.ToolCall, 0, len(msg.ToolCalls))
+		for _, tc := range msg.ToolCalls {
+			toolCall := llm.ToolCall{}
+
+			// Extract ID
+			if id, ok := tc["id"].(string); ok {
+				toolCall.ID = id
+			}
+
+			// Extract Type
+			if tcType, ok := tc["type"].(string); ok {
+				toolCall.Type = tcType
+			}
+
+			// ✅ Extract and convert function from map[string]any to llm.FunctionCall
+			if fn, ok := tc["function"].(map[string]any); ok {
+				functionCall := llm.FunctionCall{}
+
+				if name, ok := fn["name"].(string); ok {
+					functionCall.Name = name
+				}
+
+				if args, ok := fn["arguments"].(string); ok {
+					functionCall.Arguments = args
+				}
+
+				toolCall.Function = functionCall
+			}
+
+			toolCalls = append(toolCalls, toolCall)
+		}
+		llmMsg.ToolCalls = toolCalls
+	}
+
+	// ✅ FIX: Convert function call from map[string]any to llm.FunctionCall
+	if msg.FunctionCall != nil {
+		functionCall := llm.FunctionCall{}
+
+		if name, ok := msg.FunctionCall["name"].(string); ok {
+			functionCall.Name = name
+		}
+
+		if args, ok := msg.FunctionCall["arguments"].(string); ok {
+			functionCall.Arguments = args
+		}
+
+		llmMsg.FunctionCall = &functionCall
+	}
+
+	return llmMsg
 }

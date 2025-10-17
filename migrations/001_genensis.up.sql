@@ -1,8 +1,8 @@
 -- ============================================================================
--- RELAY GENESIS MIGRATION - Complete Database Schema
+-- RELAY GENESIS MIGRATION - Complete Database Schema (Updated)
 -- ============================================================================
 -- Multi-tenant messaging automation platform with AI-powered workflows
--- Includes: IAM, Auth, Channels, Messages, Sessions, Workflows, Parsers, Tools
+-- Includes: IAM, Auth, Channels, Messages, Workflows, Tools, Agent Messages
 -- ============================================================================
 
 -- Enable UUID extension
@@ -173,22 +173,27 @@ CREATE TABLE messages (
 );
 
 -- ============================================================================
--- SESSIONS Tables (Conversation Context)
+-- AGENT MESSAGES Tables (AI Conversation History)
 -- ============================================================================
 
--- Sessions table (conversation context tracking)
-CREATE TABLE sessions (
+-- Agent messages table (AI chat conversation history)
+CREATE TABLE agent_messages (
     id TEXT PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
-    sender_id VARCHAR(255) NOT NULL,
-    context JSONB, -- Session context variables
-    history JSONB, -- Message history references
-    current_state VARCHAR(255),
-    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    session_id TEXT NOT NULL, -- Conversation identifier (phone number, user ID, etc.)
+    role VARCHAR(50) NOT NULL CHECK (role IN ('system', 'user', 'assistant', 'tool', 'function')),
+    content TEXT,
+    name VARCHAR(255),
+    function_call JSONB,
+    tool_calls JSONB,
+    tool_call_id VARCHAR(255),
+    metadata JSONB DEFAULT '{}',
+    message_type VARCHAR(50) NOT NULL DEFAULT 'text' CHECK (message_type IN ('text', 'image', 'document', 'audio', 'video', 'template')),
+    processing_time_ms INTEGER CHECK (processing_time_ms >= 0),
+    model_used VARCHAR(100),
+    tokens_used INTEGER CHECK (tokens_used >= 0),
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    last_activity_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    UNIQUE(channel_id, sender_id)
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
 -- ============================================================================
@@ -202,7 +207,7 @@ CREATE TABLE workflows (
     name VARCHAR(255) NOT NULL,
     description TEXT,
     trigger JSONB NOT NULL, -- {type, channel_ids, schedule, filters}
-    steps JSONB NOT NULL, -- Array of workflow steps
+    nodes JSONB NOT NULL, -- Array of workflow nodes (renamed from steps)
     is_active BOOLEAN NOT NULL DEFAULT true,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
@@ -215,55 +220,16 @@ CREATE TABLE workflow_executions (
     workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
     message_id TEXT REFERENCES messages(id) ON DELETE CASCADE,
     tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
-    status VARCHAR(50) NOT NULL CHECK (status IN ('RUNNING', 'SUCCESS', 'FAILED', 'TIMEOUT')),
+    status VARCHAR(50) NOT NULL CHECK (status IN ('RUNNING', 'SUCCESS', 'FAILED', 'TIMEOUT', 'PAUSED')),
     response TEXT,
     should_respond BOOLEAN NOT NULL DEFAULT false,
     next_state VARCHAR(255),
     context JSONB,
     error TEXT,
-    executed_steps JSONB, -- Array of step results
+    executed_nodes JSONB, -- Array of node results (renamed from executed_steps)
     started_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     completed_at TIMESTAMP WITH TIME ZONE,
     duration_ms INTEGER
-);
-
--- ============================================================================
--- PARSERS Tables (Message Parsing Engine)
--- ============================================================================
-
--- Parsers table (message parsers - AI, Regex, Rule-based, Keyword, NLP)
-CREATE TABLE parsers (
-    id TEXT PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    name VARCHAR(255) NOT NULL,
-    description TEXT,
-    type VARCHAR(50) NOT NULL CHECK (type IN ('REGEX', 'AI', 'RULE', 'KEYWORD', 'NLP')),
-    config JSONB NOT NULL, -- Parser-specific configuration
-    priority INTEGER NOT NULL DEFAULT 100, -- Lower number = higher priority
-    is_active BOOLEAN NOT NULL DEFAULT true,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    UNIQUE(name, tenant_id)
-);
-
--- Parser executions (tracking and caching)
-CREATE TABLE parser_executions (
-    id TEXT PRIMARY KEY DEFAULT uuid_generate_v4(),
-    parser_id TEXT NOT NULL REFERENCES parsers(id) ON DELETE CASCADE,
-    message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-    tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    success BOOLEAN NOT NULL,
-    response TEXT,
-    should_respond BOOLEAN NOT NULL DEFAULT false,
-    actions JSONB, -- Array of actions to execute
-    context JSONB, -- Context updates
-    extracted_data JSONB, -- Extracted entities, regex groups, etc.
-    confidence DECIMAL(3,2), -- 0.00 to 1.00
-    next_parser_id TEXT REFERENCES parsers(id),
-    error TEXT,
-    processed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    processing_time_ms INTEGER
 );
 
 -- ============================================================================
@@ -348,14 +314,16 @@ CREATE INDEX idx_messages_created_at ON messages(created_at);
 CREATE INDEX idx_messages_channel_sender ON messages(channel_id, sender_id);
 CREATE INDEX idx_messages_content ON messages USING gin(content);
 
--- Sessions indexes
-CREATE INDEX idx_sessions_tenant_id ON sessions(tenant_id);
-CREATE INDEX idx_sessions_channel_id ON sessions(channel_id);
-CREATE INDEX idx_sessions_sender_id ON sessions(sender_id);
-CREATE INDEX idx_sessions_expires_at ON sessions(expires_at);
-CREATE INDEX idx_sessions_last_activity ON sessions(last_activity_at);
-CREATE INDEX idx_sessions_current_state ON sessions(current_state);
-CREATE INDEX idx_sessions_context ON sessions USING gin(context);
+-- Agent messages indexes
+CREATE INDEX idx_agent_messages_tenant_id ON agent_messages(tenant_id);
+CREATE INDEX idx_agent_messages_session_id ON agent_messages(session_id);
+CREATE INDEX idx_agent_messages_role ON agent_messages(role);
+CREATE INDEX idx_agent_messages_message_type ON agent_messages(message_type);
+CREATE INDEX idx_agent_messages_created_at ON agent_messages(created_at);
+CREATE INDEX idx_agent_messages_tenant_session ON agent_messages(tenant_id, session_id);
+CREATE INDEX idx_agent_messages_session_created ON agent_messages(session_id, created_at);
+CREATE INDEX idx_agent_messages_metadata ON agent_messages USING gin(metadata);
+CREATE INDEX idx_agent_messages_tool_call_id ON agent_messages(tool_call_id) WHERE tool_call_id IS NOT NULL;
 
 -- Workflows indexes
 CREATE INDEX idx_workflows_tenant_id ON workflows(tenant_id);
@@ -366,25 +334,9 @@ CREATE INDEX idx_workflows_trigger ON workflows USING gin(trigger);
 -- Workflow executions indexes
 CREATE INDEX idx_workflow_executions_workflow_id ON workflow_executions(workflow_id);
 CREATE INDEX idx_workflow_executions_message_id ON workflow_executions(message_id);
-CREATE INDEX idx_workflow_executions_session_id ON workflow_executions(session_id);
 CREATE INDEX idx_workflow_executions_tenant_id ON workflow_executions(tenant_id);
 CREATE INDEX idx_workflow_executions_status ON workflow_executions(status);
 CREATE INDEX idx_workflow_executions_started_at ON workflow_executions(started_at);
-
--- Parsers indexes
-CREATE INDEX idx_parsers_tenant_id ON parsers(tenant_id);
-CREATE INDEX idx_parsers_type ON parsers(type);
-CREATE INDEX idx_parsers_priority ON parsers(priority);
-CREATE INDEX idx_parsers_is_active ON parsers(is_active);
-CREATE INDEX idx_parsers_name ON parsers(name);
-
--- Parser executions indexes
-CREATE INDEX idx_parser_executions_parser_id ON parser_executions(parser_id);
-CREATE INDEX idx_parser_executions_message_id ON parser_executions(message_id);
-CREATE INDEX idx_parser_executions_tenant_id ON parser_executions(tenant_id);
-CREATE INDEX idx_parser_executions_success ON parser_executions(success);
-CREATE INDEX idx_parser_executions_processed_at ON parser_executions(processed_at);
-CREATE INDEX idx_parser_executions_confidence ON parser_executions(confidence);
 
 -- Tools indexes
 CREATE INDEX idx_tools_tenant_id ON tools(tenant_id);
@@ -419,8 +371,8 @@ CREATE TRIGGER update_tenant_config_updated_at BEFORE UPDATE ON tenant_config FO
 CREATE TRIGGER update_channels_updated_at BEFORE UPDATE ON channels FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_channel_stats_updated_at BEFORE UPDATE ON channel_stats FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_messages_updated_at BEFORE UPDATE ON messages FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_agent_messages_updated_at BEFORE UPDATE ON agent_messages FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_workflows_updated_at BEFORE UPDATE ON workflows FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-CREATE TRIGGER update_parsers_updated_at BEFORE UPDATE ON parsers FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_tools_updated_at BEFORE UPDATE ON tools FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- ============================================================================
@@ -432,18 +384,22 @@ COMMENT ON TABLE users IS 'Users belonging to tenants with OAuth authentication'
 COMMENT ON TABLE roles IS 'Role-based access control';
 COMMENT ON TABLE channels IS 'Multi-channel messaging endpoints (WhatsApp, Email, SMS, etc.)';
 COMMENT ON TABLE messages IS 'Normalized messages from all channels';
-COMMENT ON TABLE sessions IS 'Conversation context and state management';
+COMMENT ON TABLE agent_messages IS 'AI agent conversation history with tool/function call support';
 COMMENT ON TABLE workflows IS 'Automated workflows triggered by messages or events';
-COMMENT ON TABLE parsers IS 'Message parsing engines (AI, Regex, Rules, Keywords, NLP)';
 COMMENT ON TABLE tools IS 'Executable tools for HTTP calls, DB queries, emails, custom code';
 
 COMMENT ON COLUMN channels.config IS 'JSONB containing channel-specific credentials and settings';
 COMMENT ON COLUMN messages.content IS 'JSONB containing message type, text, attachments, and metadata';
-COMMENT ON COLUMN sessions.context IS 'JSONB containing session variables and state';
+COMMENT ON COLUMN agent_messages.session_id IS 'Conversation identifier (phone number, channel+user combo, etc.) - not a foreign key';
+COMMENT ON COLUMN agent_messages.role IS 'Message role: system, user, assistant, tool, or function';
+COMMENT ON COLUMN agent_messages.function_call IS 'Legacy function call data (deprecated, use tool_calls)';
+COMMENT ON COLUMN agent_messages.tool_calls IS 'Array of tool calls made by the assistant';
+COMMENT ON COLUMN agent_messages.tool_call_id IS 'ID of the tool call this message responds to (for tool role)';
+COMMENT ON COLUMN agent_messages.metadata IS 'Additional metadata for the message';
+COMMENT ON COLUMN agent_messages.message_type IS 'Type of message content (text, image, document, etc.)';
 COMMENT ON COLUMN workflows.trigger IS 'JSONB defining when workflow should execute';
-COMMENT ON COLUMN workflows.steps IS 'JSONB array of workflow steps to execute';
-COMMENT ON COLUMN parsers.config IS 'JSONB containing parser configuration (patterns, prompts, rules, etc.)';
-COMMENT ON COLUMN parsers.priority IS 'Lower number = higher priority for parser selection';
+COMMENT ON COLUMN workflows.nodes IS 'JSONB array of workflow nodes to execute';
+COMMENT ON COLUMN tools.config IS 'JSONB containing tool configuration (endpoints, credentials, etc.)';
 
 -- ============================================================================
 -- Completion Message
@@ -455,14 +411,15 @@ BEGIN
     RAISE NOTICE '✅ RELAY GENESIS MIGRATION COMPLETED!';
     RAISE NOTICE '========================================';
     RAISE NOTICE '';
-    RAISE NOTICE '📊 Created IAM Tables: tenants, users, roles, user_roles, role_permissions, tenant_config';
+    RAISE NOTICE '👥 Created IAM Tables: tenants, users, roles, user_roles, role_permissions, tenant_config';
     RAISE NOTICE '🔐 Created Auth Tables: refresh_tokens, user_sessions, password_reset_tokens';
     RAISE NOTICE '📱 Created Channel Tables: channels, channel_stats';
-    RAISE NOTICE '💬 Created Message Tables: messages, sessions';
-    RAISE NOTICE '⚙️ Created Automation Tables: workflows, workflow_executions, parsers, parser_executions, tools, tool_executions';
+    RAISE NOTICE '💬 Created Message Tables: messages, agent_messages';
+    RAISE NOTICE '⚙️ Created Automation Tables: workflows, workflow_executions, tools, tool_executions';
     RAISE NOTICE '';
-    RAISE NOTICE '📈 Total Tables: 18';
-    RAISE NOTICE '📌 Total Indexes: 65+';
+    RAISE NOTICE '📊 Total Tables: 16';
+    RAISE NOTICE '🔍 Total Indexes: 60+';
+    RAISE NOTICE '⚡ Total Triggers: 10';
     RAISE NOTICE '';
     RAISE NOTICE '🚀 Relay Platform is ready!';
     RAISE NOTICE '========================================';

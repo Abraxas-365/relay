@@ -11,6 +11,7 @@ import (
 // AgentMessage represents a message in a chat session
 type AgentMessage struct {
 	ID               string           `db:"id" json:"id"`
+	TenantID         kernel.TenantID  `db:"tenant_id" json:"tenant_id"` // ✅ ADDED
 	SessionID        kernel.SessionID `db:"session_id" json:"session_id"`
 	Role             string           `db:"role" json:"role"`
 	Content          *string          `db:"content" json:"content,omitempty"`
@@ -57,7 +58,6 @@ func (m *AgentMessage) ToLLMMessage() llm.Message {
 
 	// Convert function_call if present
 	if m.FunctionCall != nil {
-		// Since storexpostgres.JSONB is map[string]any, we need to convert it to the expected structure
 		if name, ok := m.FunctionCall["name"].(string); ok {
 			if arguments, ok := m.FunctionCall["arguments"].(string); ok {
 				msg.FunctionCall = &llm.FunctionCall{
@@ -70,8 +70,6 @@ func (m *AgentMessage) ToLLMMessage() llm.Message {
 
 	// Convert tool_calls if present
 	if m.ToolCalls != nil {
-		// Convert the JSONB to []llm.ToolCall
-		// First, marshal it back to JSON bytes then unmarshal to the correct type
 		if jsonBytes, err := json.Marshal(m.ToolCalls); err == nil {
 			var toolCalls []llm.ToolCall
 			if err := json.Unmarshal(jsonBytes, &toolCalls); err == nil {
@@ -82,7 +80,6 @@ func (m *AgentMessage) ToLLMMessage() llm.Message {
 
 	// Convert metadata if present
 	if m.Metadata != nil {
-		// Since it's already map[string]any, we can assign it directly
 		msg.Metadata = map[string]any(m.Metadata)
 	}
 
@@ -100,6 +97,7 @@ func ToLLMMessages(messages []AgentMessage) []llm.Message {
 
 // CreateMessageRequest represents the request to create a message
 type CreateMessageRequest struct {
+	TenantID         kernel.TenantID  `json:"tenant_id" validatex:"required,uuid"` // ✅ ADDED
 	SessionID        kernel.SessionID `json:"session_id" validatex:"required,uuid"`
 	Role             string           `json:"role" validatex:"required"`
 	Content          *string          `json:"content,omitempty" validatex:"max=10000"`

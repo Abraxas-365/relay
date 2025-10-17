@@ -78,6 +78,7 @@ func (e *DefaultWorkflowExecutor) Execute(
 
 	// Prepare initial context from input
 	nodeContext := e.prepareInitialContext(input)
+	log.Printf("📦 Initial context keys: %v", getMapKeys(nodeContext))
 
 	// Start from first node
 	currentNodeID := ""
@@ -101,9 +102,17 @@ func (e *DefaultWorkflowExecutor) Execute(
 			return nil, engine.ErrNodeNotFound().WithDetail("node_id", currentNodeID)
 		}
 
+		log.Printf("\n🔹 Processing node: %s (ID: %s, Type: %s)", node.Name, node.ID, node.Type)
+		log.Printf("   📋 Node context keys before eval: %v", getMapKeys(nodeContext))
+		log.Printf("   ⚙️  Node config before eval: %+v", node.Config)
+
 		// Evaluate expressions in config
 		evaluatedConfig, err := e.evaluateNodeConfig(ctx, node.Config, nodeContext)
 		if err != nil {
+			log.Printf("❌ Expression evaluation failed for node %s: %v", node.Name, err)
+			log.Printf("   📋 Available context keys: %v", getMapKeys(nodeContext))
+			log.Printf("   🔍 Context dump: %+v", nodeContext)
+
 			nodeResult := &engine.NodeResult{
 				NodeID:    node.ID,
 				NodeName:  node.Name,
@@ -117,6 +126,8 @@ func (e *DefaultWorkflowExecutor) Execute(
 			break
 		}
 
+		log.Printf("   ✅ Config after eval: %+v", evaluatedConfig)
+
 		nodeForExecution := *node
 		nodeForExecution.Config = evaluatedConfig
 
@@ -129,6 +140,9 @@ func (e *DefaultWorkflowExecutor) Execute(
 			}
 		}
 
+		log.Printf("   📊 Node result: success=%v, error=%s", nodeResult.Success, nodeResult.Error)
+		log.Printf("   📤 Node output keys: %v", getMapKeys(nodeResult.Output))
+
 		result.ExecutedNodes = append(result.ExecutedNodes, *nodeResult)
 
 		// Check for workflow pause (async delay)
@@ -139,13 +153,17 @@ func (e *DefaultWorkflowExecutor) Execute(
 		}
 
 		if !nodeResult.Success {
+			log.Printf("❌ Node %s failed with error: %s", node.Name, nodeResult.Error)
 			result.Success = false
 			result.Error = fmt.Errorf("node %s failed: %s", node.Name, nodeResult.Error)
 			result.ErrorMessage = nodeResult.Error
+
 			if node.OnFailure != "" {
+				log.Printf("   ↪️  Jumping to failure node: %s", node.OnFailure)
 				currentNodeID = node.OnFailure
 				continue
 			}
+			log.Printf("   🛑 No failure handler, stopping workflow")
 			break
 		}
 
@@ -157,6 +175,9 @@ func (e *DefaultWorkflowExecutor) Execute(
 				"duration_ms": nodeResult.Duration,
 			}
 
+			log.Printf("   💾 Stored node output in context with key: %s", node.ID)
+			log.Printf("   📦 Updated context keys: %v", getMapKeys(nodeContext))
+
 			for key, value := range nodeResult.Output {
 				result.Output[key] = value
 			}
@@ -164,17 +185,20 @@ func (e *DefaultWorkflowExecutor) Execute(
 
 		// Determine next node
 		if nextNodeOverride, ok := nodeContext["__next_node"].(string); ok {
+			log.Printf("   ➡️  Next node (override): %s", nextNodeOverride)
 			currentNodeID = nextNodeOverride
 			delete(nodeContext, "__next_node")
 		} else if node.OnSuccess != "" {
+			log.Printf("   ➡️  Next node (on_success): %s", node.OnSuccess)
 			currentNodeID = node.OnSuccess
 		} else {
+			log.Printf("   🏁 No next node, workflow complete")
 			currentNodeID = ""
 		}
 	}
 
 	duration := time.Since(startTime)
-	log.Printf("✅ Workflow execution completed: %s in %v", workflow.Name, duration)
+	log.Printf("✅ Workflow execution completed: %s in %v (success=%v)", workflow.Name, duration, result.Success)
 
 	return result, nil
 }
@@ -347,6 +371,7 @@ func (e *DefaultWorkflowExecutor) executeNodeInternal(
 			}
 		}
 	} else {
+		log.Printf("❌ No executor found for node type: %s", node.Type)
 		err = engine.ErrInvalidWorkflowNode().
 			WithDetail("node_type", string(node.Type)).
 			WithDetail("reason", "no executor found for node type")
@@ -400,6 +425,15 @@ func (e *DefaultWorkflowExecutor) evaluateNodeConfig(
 	}
 
 	return evaluatedConfig, nil
+}
+
+// getMapKeys returns all keys from a map for debugging
+func getMapKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 // ============================================================================
@@ -497,4 +531,3 @@ func toFloat64(v any) (float64, bool) {
 		return 0, false
 	}
 }
-

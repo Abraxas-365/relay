@@ -32,7 +32,7 @@ type dbWorkflow struct {
 	Name        string          `db:"name"`
 	Description string          `db:"description"`
 	Trigger     json.RawMessage `db:"trigger"`
-	Steps       json.RawMessage `db:"steps"`
+	Nodes       json.RawMessage `db:"nodes"` // ✅ Changed from steps
 	IsActive    bool            `db:"is_active"`
 	CreatedAt   string          `db:"created_at"`
 	UpdatedAt   string          `db:"updated_at"`
@@ -45,11 +45,11 @@ func toDBWorkflow(wf engine.Workflow) (*dbWorkflow, error) {
 		return nil, fmt.Errorf("failed to marshal trigger: %w", err)
 	}
 
-	stepsJSON := []byte("[]")
+	nodesJSON := []byte("[]") // ✅ Changed from stepsJSON
 	if wf.Nodes != nil && len(wf.Nodes) > 0 {
-		stepsJSON, err = json.Marshal(wf.Nodes)
+		nodesJSON, err = json.Marshal(wf.Nodes)
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal steps: %w", err)
+			return nil, fmt.Errorf("failed to marshal nodes: %w", err)
 		}
 	}
 
@@ -59,7 +59,7 @@ func toDBWorkflow(wf engine.Workflow) (*dbWorkflow, error) {
 		Name:        wf.Name,
 		Description: wf.Description,
 		Trigger:     triggerJSON,
-		Steps:       stepsJSON,
+		Nodes:       nodesJSON, // ✅ Changed from Steps
 		IsActive:    wf.IsActive,
 		CreatedAt:   wf.CreatedAt.Format("2006-01-02 15:04:05.999999"),
 		UpdatedAt:   wf.UpdatedAt.Format("2006-01-02 15:04:05.999999"),
@@ -73,10 +73,10 @@ func toDomainWorkflow(dbWf *dbWorkflow) (*engine.Workflow, error) {
 		return nil, fmt.Errorf("failed to unmarshal trigger: %w", err)
 	}
 
-	var steps []engine.WorkflowNode
-	if len(dbWf.Steps) > 0 && string(dbWf.Steps) != "null" {
-		if err := json.Unmarshal(dbWf.Steps, &steps); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal steps: %w", err)
+	var nodes []engine.WorkflowNode // ✅ Changed from steps
+	if len(dbWf.Nodes) > 0 && string(dbWf.Nodes) != "null" {
+		if err := json.Unmarshal(dbWf.Nodes, &nodes); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal nodes: %w", err)
 		}
 	}
 
@@ -86,7 +86,7 @@ func toDomainWorkflow(dbWf *dbWorkflow) (*engine.Workflow, error) {
 		Name:        dbWf.Name,
 		Description: dbWf.Description,
 		Trigger:     trigger,
-		Nodes:       steps,
+		Nodes:       nodes,
 		IsActive:    dbWf.IsActive,
 	}
 
@@ -114,12 +114,12 @@ func (r *PostgresWorkflowRepository) create(ctx context.Context, wf engine.Workf
 
 	query := `
 		INSERT INTO workflows (
-			id, tenant_id, name, description, trigger, steps,
+			id, tenant_id, name, description, trigger, nodes,
 			is_active, created_at, updated_at
 		) VALUES (
-			:id, :tenant_id, :name, :description, :trigger, :steps,
+			:id, :tenant_id, :name, :description, :trigger, :nodes,
 			:is_active, :created_at, :updated_at
-		)`
+		)` // ✅ Changed steps to nodes
 
 	_, err = r.db.NamedExecContext(ctx, query, dbWf)
 	if err != nil {
@@ -149,10 +149,10 @@ func (r *PostgresWorkflowRepository) update(ctx context.Context, wf engine.Workf
 			name = :name,
 			description = :description,
 			trigger = :trigger,
-			steps = :steps,
+			nodes = :nodes,
 			is_active = :is_active,
 			updated_at = :updated_at
-		WHERE id = :id AND tenant_id = :tenant_id`
+		WHERE id = :id AND tenant_id = :tenant_id` // ✅ Changed steps to nodes
 
 	result, err := r.db.NamedExecContext(ctx, query, dbWf)
 	if err != nil {
@@ -180,10 +180,10 @@ func (r *PostgresWorkflowRepository) update(ctx context.Context, wf engine.Workf
 func (r *PostgresWorkflowRepository) FindByID(ctx context.Context, id kernel.WorkflowID) (*engine.Workflow, error) {
 	query := `
 		SELECT 
-			id, tenant_id, name, description, trigger, steps,
+			id, tenant_id, name, description, trigger, nodes,
 			is_active, created_at, updated_at
 		FROM workflows
-		WHERE id = $1`
+		WHERE id = $1` // ✅ Changed steps to nodes
 
 	var dbWf dbWorkflow
 	err := r.db.GetContext(ctx, &dbWf, query, id.String())
@@ -201,10 +201,10 @@ func (r *PostgresWorkflowRepository) FindByID(ctx context.Context, id kernel.Wor
 func (r *PostgresWorkflowRepository) FindByName(ctx context.Context, name string, tenantID kernel.TenantID) (*engine.Workflow, error) {
 	query := `
 		SELECT 
-			id, tenant_id, name, description, trigger, steps,
+			id, tenant_id, name, description, trigger, nodes,
 			is_active, created_at, updated_at
 		FROM workflows
-		WHERE name = $1 AND tenant_id = $2`
+		WHERE name = $1 AND tenant_id = $2` // ✅ Changed steps to nodes
 
 	var dbWf dbWorkflow
 	err := r.db.GetContext(ctx, &dbWf, query, name, tenantID.String())
@@ -256,11 +256,11 @@ func (r *PostgresWorkflowRepository) ExistsByName(ctx context.Context, name stri
 func (r *PostgresWorkflowRepository) FindByTenant(ctx context.Context, tenantID kernel.TenantID) ([]*engine.Workflow, error) {
 	query := `
 		SELECT 
-			id, tenant_id, name, description, trigger, steps,
+			id, tenant_id, name, description, trigger, nodes,
 			is_active, created_at, updated_at
 		FROM workflows
 		WHERE tenant_id = $1
-		ORDER BY name ASC`
+		ORDER BY name ASC` // ✅ Changed steps to nodes
 
 	var dbWorkflows []dbWorkflow
 	err := r.db.SelectContext(ctx, &dbWorkflows, query, tenantID.String())
@@ -284,11 +284,11 @@ func (r *PostgresWorkflowRepository) FindByTenant(ctx context.Context, tenantID 
 func (r *PostgresWorkflowRepository) FindActive(ctx context.Context, tenantID kernel.TenantID) ([]*engine.Workflow, error) {
 	query := `
 		SELECT 
-			id, tenant_id, name, description, trigger, steps,
+			id, tenant_id, name, description, trigger, nodes,
 			is_active, created_at, updated_at
 		FROM workflows
 		WHERE tenant_id = $1 AND is_active = true
-		ORDER BY name ASC`
+		ORDER BY name ASC` // ✅ Changed steps to nodes
 
 	var dbWorkflows []dbWorkflow
 	err := r.db.SelectContext(ctx, &dbWorkflows, query, tenantID.String())
@@ -311,11 +311,11 @@ func (r *PostgresWorkflowRepository) FindActive(ctx context.Context, tenantID ke
 func (r *PostgresWorkflowRepository) FindByTriggerType(ctx context.Context, triggerType engine.TriggerType, tenantID kernel.TenantID) ([]*engine.Workflow, error) {
 	query := `
 		SELECT 
-			id, tenant_id, name, description, trigger, steps,
+			id, tenant_id, name, description, trigger, nodes,
 			is_active, created_at, updated_at
 		FROM workflows
 		WHERE tenant_id = $1 AND trigger->>'type' = $2
-		ORDER BY name ASC`
+		ORDER BY name ASC` // ✅ Changed steps to nodes
 
 	var dbWorkflows []dbWorkflow
 	err := r.db.SelectContext(ctx, &dbWorkflows, query, tenantID.String(), string(triggerType))
@@ -339,13 +339,13 @@ func (r *PostgresWorkflowRepository) FindByTriggerType(ctx context.Context, trig
 func (r *PostgresWorkflowRepository) FindActiveByTrigger(ctx context.Context, trigger engine.WorkflowTrigger, tenantID kernel.TenantID) ([]*engine.Workflow, error) {
 	query := `
 		SELECT 
-			id, tenant_id, name, description, trigger, steps,
+			id, tenant_id, name, description, trigger, nodes,
 			is_active, created_at, updated_at
 		FROM workflows
 		WHERE tenant_id = $1 
 			AND is_active = true 
 			AND trigger->>'type' = $2
-		ORDER BY name ASC`
+		ORDER BY name ASC` // ✅ Changed steps to nodes
 
 	var dbWorkflows []dbWorkflow
 	err := r.db.SelectContext(ctx, &dbWorkflows, query, tenantID.String(), string(trigger.Type))
@@ -401,13 +401,13 @@ func (r *PostgresWorkflowRepository) List(ctx context.Context, req engine.Workfl
 	// Data query
 	dataQuery := fmt.Sprintf(`
 		SELECT 
-			id, tenant_id, name, description, trigger, steps,
+			id, tenant_id, name, description, trigger, nodes,
 			is_active, created_at, updated_at
 		FROM workflows
 		WHERE %s
 		ORDER BY name ASC
 		LIMIT $%d OFFSET $%d`,
-		whereClause, argPos, argPos+1)
+		whereClause, argPos, argPos+1) // ✅ Changed steps to nodes
 
 	args = append(args, req.PageSize, req.GetOffset())
 

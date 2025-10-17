@@ -22,6 +22,7 @@ import (
 	"github.com/Abraxas-365/relay/engine/delayscheduler"
 	"github.com/Abraxas-365/relay/engine/engineinfra"
 	"github.com/Abraxas-365/relay/engine/nodeexec"
+	"github.com/Abraxas-365/relay/engine/triggerhandler"
 	"github.com/Abraxas-365/relay/engine/workflowexec"
 
 	"github.com/Abraxas-365/relay/iam"
@@ -117,6 +118,7 @@ type Container struct {
 	WorkflowExecutor    engine.WorkflowExecutor
 	ExpressionEvaluator engine.ExpressionEvaluator
 	DelayScheduler      engine.DelayScheduler
+	TriggerHandler      *triggerhandler.TriggerHandler
 
 	// Node Executors
 	ActionExecutor      engine.NodeExecutor
@@ -379,6 +381,12 @@ func (c *Container) initEngineComponents() {
 	)
 	log.Println("    ✅ Workflow executor initialized (n8n-style)")
 
+	c.TriggerHandler = triggerhandler.NewTriggerHandler(
+		c.WorkflowRepo,
+		c.WorkflowExecutor,
+	)
+	log.Println("    ✅ Trigger handler initialized")
+
 	// Initialize channel webhook handler (for channel trigger workflows)
 	if c.ChannelRepo != nil && c.WhatsAppAdapter != nil {
 		c.WhatsAppWebhookHandler = whatsapp.NewWebhookHandler(
@@ -387,13 +395,20 @@ func (c *Container) initEngineComponents() {
 		)
 		log.Println("    ✅ WhatsApp webhook handler initialized")
 
-		// Initialize channel API handler
-		// This would trigger workflows when messages arrive
-		// c.ChannelHandler = channelapi.NewChannelHandler(c.WorkflowExecutor)
-		// log.Println("    ✅ Channel API handler initialized")
+		// ✅ Initialize ChannelHandler
+		c.ChannelHandler = channelapi.NewChannelHandler(c.TriggerHandler)
+		log.Println("    ✅ Channel handler initialized")
+
+		// ✅ Initialize WhatsAppWebhookRoutes with both handlers
+		c.WhatsAppWebhookRoutes = whatsapp.NewWebhookRoutes(
+			c.WhatsAppWebhookHandler,
+			c.ChannelHandler.ProcessIncomingMessage, // Pass the fiber.Handler
+		)
+		log.Println("    ✅ WhatsApp webhook routes initialized")
 	}
 
 	log.Println("  ✅ Engine components initialized")
+
 }
 
 // =================================================================

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Abraxas-365/craftable/errx"
+	"github.com/Abraxas-365/craftable/logx"
 	"github.com/Abraxas-365/relay/channels"
 	"github.com/Abraxas-365/relay/engine"
 	"github.com/Abraxas-365/relay/pkg/kernel"
@@ -25,6 +26,7 @@ func NewSendMessageExecutor(channelManager channels.ChannelManager) *SendMessage
 }
 
 func (e *SendMessageExecutor) Execute(ctx context.Context, node engine.WorkflowNode, input map[string]any) (*engine.NodeResult, error) {
+	logx.Info("Send Message Executor")
 	startTime := time.Now()
 
 	result := &engine.NodeResult{

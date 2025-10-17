@@ -26,6 +26,7 @@ func NewPostgresAgentChatRepository(db *sqlx.DB) *PostgresAgentChatRepository {
 // dbAgentMessage is an intermediate struct for database operations
 type dbAgentMessage struct {
 	ID               string          `db:"id"`
+	TenantID         string          `db:"tenant_id"` // ✅ ADDED
 	SessionID        string          `db:"session_id"`
 	Role             string          `db:"role"`
 	Content          *string         `db:"content"`
@@ -46,6 +47,7 @@ type dbAgentMessage struct {
 func toDBAgentMessage(m *agent.AgentMessage) (*dbAgentMessage, error) {
 	dbMsg := &dbAgentMessage{
 		ID:               m.ID,
+		TenantID:         m.TenantID.String(), // ✅ ADDED
 		SessionID:        m.SessionID.String(),
 		Role:             m.Role,
 		Content:          m.Content,
@@ -67,7 +69,7 @@ func toDBAgentMessage(m *agent.AgentMessage) (*dbAgentMessage, error) {
 		}
 		dbMsg.FunctionCall = fcBytes
 	} else {
-		dbMsg.FunctionCall = json.RawMessage("null") // Important: use "null" not empty
+		dbMsg.FunctionCall = json.RawMessage("null")
 	}
 
 	// Convert ToolCalls - set to null if nil
@@ -78,7 +80,7 @@ func toDBAgentMessage(m *agent.AgentMessage) (*dbAgentMessage, error) {
 		}
 		dbMsg.ToolCalls = tcBytes
 	} else {
-		dbMsg.ToolCalls = json.RawMessage("null") // Important: use "null" not empty
+		dbMsg.ToolCalls = json.RawMessage("null")
 	}
 
 	// Convert Metadata - set to empty object if nil
@@ -89,7 +91,7 @@ func toDBAgentMessage(m *agent.AgentMessage) (*dbAgentMessage, error) {
 		}
 		dbMsg.Metadata = mdBytes
 	} else {
-		dbMsg.Metadata = json.RawMessage("{}") // Empty object
+		dbMsg.Metadata = json.RawMessage("{}")
 	}
 
 	return dbMsg, nil
@@ -99,6 +101,7 @@ func toDBAgentMessage(m *agent.AgentMessage) (*dbAgentMessage, error) {
 func toDomainAgentMessage(db *dbAgentMessage) (*agent.AgentMessage, error) {
 	msg := &agent.AgentMessage{
 		ID:               db.ID,
+		TenantID:         kernel.TenantID(db.TenantID), // ✅ ADDED
 		SessionID:        kernel.SessionID(db.SessionID),
 		Role:             db.Role,
 		Content:          db.Content,
@@ -146,13 +149,13 @@ func toDomainAgentMessage(db *dbAgentMessage) (*agent.AgentMessage, error) {
 func (r *PostgresAgentChatRepository) GetAllMessagesBySession(ctx context.Context, sessionID kernel.SessionID) ([]agent.AgentMessage, error) {
 	query := `
 		SELECT 
-			id, session_id, role, content, name, function_call, tool_calls, 
+			id, tenant_id, session_id, role, content, name, function_call, tool_calls, 
 			tool_call_id, metadata, message_type, processing_time_ms, 
 			model_used, tokens_used, created_at, updated_at
 		FROM agent_messages
 		WHERE session_id = $1
 		ORDER BY created_at ASC, id ASC
-	`
+	` // ✅ ADDED tenant_id to SELECT
 
 	var dbMessages []dbAgentMessage
 	err := r.db.SelectContext(ctx, &dbMessages, query, sessionID.String())
@@ -176,10 +179,16 @@ func (r *PostgresAgentChatRepository) GetAllMessagesBySession(ctx context.Contex
 
 // CreateMessage creates a new message in the database
 func (r *PostgresAgentChatRepository) CreateMessage(ctx context.Context, req agent.CreateMessageRequest) (*agent.AgentMessage, error) {
+	// ✅ Validate TenantID is present
+	if req.TenantID.IsEmpty() {
+		return nil, errx.New("tenant_id is required", errx.TypeValidation)
+	}
+
 	// Generate ID and timestamps
 	now := time.Now()
 	msg := &agent.AgentMessage{
 		ID:               uuid.New().String(),
+		TenantID:         req.TenantID, // ✅ ADDED
 		SessionID:        req.SessionID,
 		Role:             req.Role,
 		Content:          req.Content,
@@ -188,7 +197,7 @@ func (r *PostgresAgentChatRepository) CreateMessage(ctx context.Context, req age
 		ToolCalls:        req.ToolCalls,
 		ToolCallID:       req.ToolCallID,
 		Metadata:         req.Metadata,
-		MessageType:      agent.MessageTypeText, // Default
+		MessageType:      agent.MessageTypeText,
 		ProcessingTimeMs: req.ProcessingTimeMs,
 		ModelUsed:        req.ModelUsed,
 		TokensUsed:       req.TokensUsed,
@@ -208,14 +217,14 @@ func (r *PostgresAgentChatRepository) CreateMessage(ctx context.Context, req age
 		return nil, err
 	}
 
-	// Insert query
+	// ✅ Insert query - ADDED tenant_id
 	query := `
 		INSERT INTO agent_messages (
-			id, session_id, role, content, name, function_call, tool_calls,
+			id, tenant_id, session_id, role, content, name, function_call, tool_calls,
 			tool_call_id, metadata, message_type, processing_time_ms,
 			model_used, tokens_used, created_at, updated_at
 		) VALUES (
-			:id, :session_id, :role, :content, :name, :function_call, :tool_calls,
+			:id, :tenant_id, :session_id, :role, :content, :name, :function_call, :tool_calls,
 			:tool_call_id, :metadata, :message_type, :processing_time_ms,
 			:model_used, :tokens_used, :created_at, :updated_at
 		)
@@ -225,7 +234,8 @@ func (r *PostgresAgentChatRepository) CreateMessage(ctx context.Context, req age
 	if err != nil {
 		logx.Error("Error inserting agent message: %v", err)
 		return nil, errx.Wrap(err, "failed to create message", errx.TypeInternal).
-			WithDetail("session_id", req.SessionID.String())
+			WithDetail("session_id", req.SessionID.String()).
+			WithDetail("tenant_id", req.TenantID.String()) // ✅ ADDED
 	}
 
 	return msg, nil
@@ -255,9 +265,7 @@ func (r *PostgresAgentChatRepository) ClearSessionMessages(ctx context.Context, 
 	}
 
 	rowsAffected, _ := result.RowsAffected()
-
-	// Log for debugging (optional)
-	_ = rowsAffected // You can use this for logging if needed
+	_ = rowsAffected
 
 	return nil
 }

@@ -57,18 +57,27 @@ func (e *AIAgentExecutor) Execute(ctx context.Context, node engine.WorkflowNode,
 		return result, errx.New("no user message found", errx.TypeValidation)
 	}
 
+	// ✅ FIX: Extract tenant_id
+	tenantID := e.extractTenantID(input)
+	if tenantID == "" {
+		result.Success = false
+		result.Error = "tenant_id not found in input"
+		result.Duration = time.Since(startTime).Milliseconds()
+		return result, errx.New("tenant_id required for AI agent with memory", errx.TypeValidation)
+	}
+
 	// Extract conversation ID (for memory persistence)
 	conversationID := e.extractConversationID(input)
 
-	log.Printf("🤖 AI Agent '%s' processing with model: %s (memory: %v, conversation_id: %s)",
-		node.Name, aiConfig.Model, aiConfig.UseMemory, conversationID)
+	log.Printf("🤖 AI Agent '%s' processing with model: %s (memory: %v, conversation_id: %s, tenant: %s)",
+		node.Name, aiConfig.Model, aiConfig.UseMemory, conversationID, tenantID)
 
 	var responseText string
 	var metadata map[string]any
 
 	// Decide execution mode based on UseMemory flag and conversation ID
 	if aiConfig.UseMemory && conversationID != "" {
-		responseText, metadata, err = e.executeWithAgent(ctx, aiConfig, userMessage, conversationID, input)
+		responseText, metadata, err = e.executeWithAgent(ctx, aiConfig, userMessage, tenantID, conversationID, input)
 	} else {
 		responseText, metadata, err = e.executeWithLLM(ctx, aiConfig, userMessage, input)
 	}
@@ -88,6 +97,7 @@ func (e *AIAgentExecutor) Execute(ctx context.Context, node engine.WorkflowNode,
 	result.Output["provider"] = aiConfig.Provider
 	result.Output["use_memory"] = aiConfig.UseMemory
 	result.Output["conversation_id"] = conversationID
+	result.Output["tenant_id"] = tenantID
 
 	// Add metadata
 	if metadata != nil {
@@ -142,11 +152,12 @@ func (e *AIAgentExecutor) executeWithLLM(
 	return response.Message.Content, metadata, nil
 }
 
-// executeWithAgent uses agentx with persistent memory (no Session entity required)
+// ✅ FIX: executeWithAgent now accepts tenantID parameter
 func (e *AIAgentExecutor) executeWithAgent(
 	ctx context.Context,
 	config *engine.AIAgentConfig,
 	userMessage string,
+	tenantID string, // ✅ ADDED
 	conversationID string,
 	input map[string]any,
 ) (string, map[string]any, error) {
@@ -156,10 +167,10 @@ func (e *AIAgentExecutor) executeWithAgent(
 	// Build context messages from input
 	contextMessages := e.buildContextMessagesFromInput(input)
 
-	// Create SessionMemory with persistent storage
-	// Use conversationID as the session identifier
+	// ✅ FIX: Create SessionMemory with tenant_id
 	memory := agent.NewSessionMemory(
 		ctx,
+		kernel.TenantID(tenantID), // ✅ ADDED
 		kernel.SessionID(conversationID),
 		config.SystemPrompt,
 		contextMessages,
@@ -192,10 +203,35 @@ func (e *AIAgentExecutor) executeWithAgent(
 	metadata := map[string]any{
 		"mode":            "agent",
 		"conversation_id": conversationID,
+		"tenant_id":       tenantID,
 		"has_memory":      true,
 	}
 
 	return response, metadata, nil
+}
+
+// ✅ NEW: extractTenantID gets tenant_id from input
+func (e *AIAgentExecutor) extractTenantID(input map[string]any) string {
+	// Try direct tenant_id field
+	if tenantID, ok := input["tenant_id"].(string); ok && tenantID != "" {
+		return tenantID
+	}
+
+	// Try from trigger data
+	if trigger, ok := input["trigger"].(map[string]any); ok {
+		if tenantID, ok := trigger["tenant_id"].(string); ok && tenantID != "" {
+			return tenantID
+		}
+	}
+
+	// Try from metadata
+	if metadata, ok := input["metadata"].(map[string]any); ok {
+		if tenantID, ok := metadata["tenant_id"].(string); ok && tenantID != "" {
+			return tenantID
+		}
+	}
+
+	return ""
 }
 
 // extractUserMessage gets the user message from input
@@ -334,4 +370,3 @@ func (e *AIAgentExecutor) ValidateConfig(config map[string]any) error {
 	}
 	return aiConfig.Validate()
 }
-
