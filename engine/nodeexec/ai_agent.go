@@ -48,22 +48,32 @@ func (e *AIAgentExecutor) Execute(ctx context.Context, node engine.WorkflowNode,
 		return result, err
 	}
 
-	// Extract user message
-	userMessage := e.extractUserMessage(input)
-	if userMessage == "" {
-		result.Success = false
-		result.Error = "no user message found in input"
-		result.Duration = time.Since(startTime).Milliseconds()
-		return result, errx.New("no user message found", errx.TypeValidation)
+	// ✅ NEW: Check for explicit prompt in config (for scheduled/generation workflows)
+	var userMessage string
+	if promptFromConfig, ok := node.Config["prompt"].(string); ok && promptFromConfig != "" {
+		userMessage = promptFromConfig
+		log.Printf("🤖 AI Agent using prompt from config: %s", userMessage)
+	} else if userPrompt, ok := node.Config["user_prompt"].(string); ok && userPrompt != "" {
+		userMessage = userPrompt
+		log.Printf("🤖 AI Agent using user_prompt from config: %s", userMessage)
+	} else {
+		// Extract from trigger (existing behavior)
+		userMessage = e.extractUserMessage(input)
 	}
 
-	// ✅ FIX: Extract tenant_id
+	// ✅ If still no message, use a default generation prompt
+	if userMessage == "" {
+		userMessage = "Generate a creative message." // Fallback
+		log.Printf("⚠️  No user message or prompt found, using default: %s", userMessage)
+	}
+
+	// Extract tenant_id
 	tenantID := e.extractTenantID(input)
 	if tenantID == "" {
-		result.Success = false
-		result.Error = "tenant_id not found in input"
-		result.Duration = time.Since(startTime).Milliseconds()
-		return result, errx.New("tenant_id required for AI agent with memory", errx.TypeValidation)
+		// ✅ For scheduled workflows without explicit tenant_id, use from input
+		if tid, ok := input["tenant_id"].(string); ok {
+			tenantID = tid
+		}
 	}
 
 	// Extract conversation ID (for memory persistence)
@@ -76,7 +86,7 @@ func (e *AIAgentExecutor) Execute(ctx context.Context, node engine.WorkflowNode,
 	var metadata map[string]any
 
 	// Decide execution mode based on UseMemory flag and conversation ID
-	if aiConfig.UseMemory && conversationID != "" {
+	if aiConfig.UseMemory && conversationID != "" && tenantID != "" {
 		responseText, metadata, err = e.executeWithAgent(ctx, aiConfig, userMessage, tenantID, conversationID, input)
 	} else {
 		responseText, metadata, err = e.executeWithLLM(ctx, aiConfig, userMessage, input)

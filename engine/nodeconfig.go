@@ -25,16 +25,17 @@ type NodeConfig interface {
 // ============================================================================
 
 type AIAgentConfig struct {
-	Provider           string         `json:"provider"`      // openai, anthropic, gemini
-	Model              string         `json:"model"`         // gpt-4, claude-3, etc.
-	SystemPrompt       string         `json:"system_prompt"` // System instruction
+	Provider           string         `json:"provider"`
+	Model              string         `json:"model"`
+	SystemPrompt       string         `json:"system_prompt"`
+	Prompt             string         `json:"prompt,omitempty"`
 	Temperature        *float32       `json:"temperature,omitempty"`
 	MaxTokens          *int           `json:"max_tokens,omitempty"`
 	Timeout            *int           `json:"timeout,omitempty"`
-	UseMemory          bool           `json:"use_memory,omitempty"`           // Enable session memory
-	Tools              []string       `json:"tools,omitempty"`                // Tool IDs to use
-	MaxAutoIterations  *int           `json:"max_auto_iterations,omitempty"`  // Max iterations with "auto" tool choice
-	MaxTotalIterations *int           `json:"max_total_iterations,omitempty"` // Hard limit
+	UseMemory          bool           `json:"use_memory,omitempty"`
+	Tools              []string       `json:"tools,omitempty"`
+	MaxAutoIterations  *int           `json:"max_auto_iterations,omitempty"`
+	MaxTotalIterations *int           `json:"max_total_iterations,omitempty"`
 	Metadata           map[string]any `json:"metadata,omitempty"`
 }
 

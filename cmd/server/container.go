@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 
@@ -22,6 +21,7 @@ import (
 	"github.com/Abraxas-365/relay/engine/delayscheduler"
 	"github.com/Abraxas-365/relay/engine/engineinfra"
 	"github.com/Abraxas-365/relay/engine/nodeexec"
+	"github.com/Abraxas-365/relay/engine/scheduler"
 	"github.com/Abraxas-365/relay/engine/triggerhandler"
 	"github.com/Abraxas-365/relay/engine/workflowexec"
 
@@ -119,6 +119,11 @@ type Container struct {
 	ExpressionEvaluator engine.ExpressionEvaluator
 	DelayScheduler      engine.DelayScheduler
 	TriggerHandler      *triggerhandler.TriggerHandler
+
+	// ✅ Schedule Components
+	ScheduleRepo      engine.WorkflowScheduleRepository
+	ScheduleService   *scheduler.ScheduleService
+	WorkflowScheduler *scheduler.WorkflowScheduler
 
 	// Node Executors
 	ActionExecutor      engine.NodeExecutor
@@ -348,6 +353,10 @@ func (c *Container) initEngineComponents() {
 	c.WorkflowRepo = engineinfra.NewPostgresWorkflowRepository(c.DB)
 	log.Println("    ✅ Workflow repository initialized")
 
+	// ✅ Initialize schedule repository
+	c.ScheduleRepo = engineinfra.NewPostgresScheduleRepository(c.DB)
+	log.Println("    ✅ Schedule repository initialized")
+
 	// Initialize expression evaluator
 	c.ExpressionEvaluator = engine.NewCelEvaluator()
 	log.Println("    ✅ Expression evaluator initialized")
@@ -376,7 +385,7 @@ func (c *Container) initEngineComponents() {
 	c.LoopExecutor = nodeexec.NewLoopExecutor()
 	c.ValidateExecutor = nodeexec.NewValidateExecutor()
 
-	log.Println("    ✅ Node executors initialized")
+	log.Println("    ✅ Node executors initialized (10 types)")
 
 	// Initialize workflow executor (n8n-style)
 	c.WorkflowExecutor = workflowexec.NewDefaultWorkflowExecutor(
@@ -400,6 +409,24 @@ func (c *Container) initEngineComponents() {
 	)
 	log.Println("    ✅ Trigger handler initialized")
 
+	// ✅ Initialize schedule service
+	c.ScheduleService = scheduler.NewScheduleService(
+		c.ScheduleRepo,
+		c.WorkflowRepo,
+	)
+	log.Println("    ✅ Schedule service initialized")
+
+	// ✅ Initialize workflow scheduler
+	c.WorkflowScheduler = scheduler.NewWorkflowScheduler(
+		c.ScheduleRepo,
+		c.TriggerHandler,
+	)
+	log.Println("    ✅ Workflow scheduler initialized")
+
+	// ✅ Start workflow scheduler worker
+	go c.WorkflowScheduler.Start(ctx)
+	log.Println("    ✅ Workflow scheduler worker started")
+
 	// Initialize channel webhook handler (for channel trigger workflows)
 	if c.ChannelRepo != nil && c.WhatsAppAdapter != nil {
 		c.WhatsAppWebhookHandler = whatsapp.NewWebhookHandler(
@@ -421,7 +448,6 @@ func (c *Container) initEngineComponents() {
 	}
 
 	log.Println("  ✅ Engine components initialized")
-
 }
 
 // =================================================================
@@ -433,13 +459,15 @@ func (c *Container) handleWorkflowContinuation(
 	ctx context.Context,
 	continuation *engine.WorkflowContinuation,
 ) error {
-	log.Printf("🔄 Resuming workflow %s from node %s",
+	log.Printf("📥 Resuming workflow %s from node %s",
 		continuation.WorkflowID, continuation.NextNodeID)
 
 	// Get workflow
 	workflow, err := c.WorkflowRepo.FindByID(ctx, kernel.WorkflowID(continuation.WorkflowID))
 	if err != nil {
-		return fmt.Errorf("failed to get workflow: %w", err)
+		return engine.ErrWorkflowNotFound().
+			WithDetail("workflow_id", continuation.WorkflowID).
+			WithCause(err)
 	}
 
 	// Prepare workflow input from saved context
@@ -469,7 +497,10 @@ func (c *Container) handleWorkflowContinuation(
 	}
 
 	if err != nil {
-		return fmt.Errorf("failed to resume workflow: %w", err)
+		return engine.ErrWorkflowExecutionFailed().
+			WithDetail("workflow_id", continuation.WorkflowID).
+			WithDetail("continuation_id", continuation.ID).
+			WithCause(err)
 	}
 
 	log.Printf("✅ Workflow resumed successfully: success=%v", result.Success)
@@ -511,6 +542,12 @@ type RouteGroup struct {
 
 func (c *Container) Cleanup() {
 	log.Println("🧹 Cleaning up container resources...")
+
+	// ✅ Stop workflow scheduler
+	if c.WorkflowScheduler != nil {
+		log.Println("  ⏰ Stopping workflow scheduler...")
+		c.WorkflowScheduler.Stop()
+	}
 
 	// Stop delay scheduler worker
 	if c.DelayScheduler != nil {
@@ -563,6 +600,7 @@ func (c *Container) HealthCheck() map[string]bool {
 	}
 
 	health["workflow_executor"] = c.WorkflowExecutor != nil
+	health["workflow_scheduler"] = c.WorkflowScheduler != nil
 	health["channel_manager"] = c.ChannelManager != nil
 	health["whatsapp_adapter"] = c.WhatsAppAdapter != nil
 	health["agent_chat_repo"] = c.AgentChatRepo != nil
@@ -585,6 +623,8 @@ func (c *Container) GetServiceNames() []string {
 		"RoleService",
 		"ChannelService",
 		"WorkflowExecutor",
+		"ScheduleService",   // ✅ Added
+		"WorkflowScheduler", // ✅ Added
 		"EventBus",
 		"AgentChatRepo",
 		"DelayScheduler",
@@ -598,6 +638,7 @@ func (c *Container) GetRepositoryNames() []string {
 		"RoleRepo",
 		"ChannelRepo",
 		"WorkflowRepo",
+		"ScheduleRepo", // ✅ Added
 		"AgentChatRepo",
 	}
 }
@@ -610,21 +651,9 @@ func (c *Container) GetNodeExecutorNames() []string {
 		"AIAgentExecutor",
 		"SendMessageExecutor",
 		"HTTPExecutor",
+		"TransformExecutor", // ✅ Added
+		"SwitchExecutor",    // ✅ Added
+		"LoopExecutor",      // ✅ Added
+		"ValidateExecutor",  // ✅ Added
 	}
-}
-
-func (c *Container) GetChannelAdapterNames() []string {
-	adapters := []string{}
-	if c.WhatsAppAdapter != nil {
-		adapters = append(adapters, "WhatsAppAdapter")
-	}
-	return adapters
-}
-
-// Get delay scheduler metrics
-func (c *Container) GetDelaySchedulerMetrics(ctx context.Context) (int64, error) {
-	if c.DelayScheduler != nil {
-		return c.DelayScheduler.GetPendingCount(ctx)
-	}
-	return 0, fmt.Errorf("delay scheduler not initialized")
 }

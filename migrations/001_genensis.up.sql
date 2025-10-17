@@ -424,3 +424,43 @@ BEGIN
     RAISE NOTICE '🚀 Relay Platform is ready!';
     RAISE NOTICE '========================================';
 END $$;
+
+-- migrations/add_workflow_schedules.sql
+
+CREATE TABLE workflow_schedules (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+    
+    -- Schedule configuration
+    schedule_type VARCHAR(20) NOT NULL, -- 'cron', 'interval', 'once'
+    cron_expression VARCHAR(100),       -- For cron: "0 9 * * *" (every day at 9am)
+    interval_seconds INTEGER,            -- For interval: 300 (every 5 minutes)
+    scheduled_at TIMESTAMP,              -- For once: specific date/time
+    
+    -- Status
+    is_active BOOLEAN DEFAULT true,
+    last_run_at TIMESTAMP,
+    next_run_at TIMESTAMP,
+    run_count INTEGER DEFAULT 0,
+    
+    -- Metadata
+    timezone VARCHAR(50) DEFAULT 'UTC',
+    metadata JSONB,
+    
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    
+    CONSTRAINT valid_schedule_type CHECK (schedule_type IN ('cron', 'interval', 'once')),
+    CONSTRAINT has_schedule_config CHECK (
+        (schedule_type = 'cron' AND cron_expression IS NOT NULL) OR
+        (schedule_type = 'interval' AND interval_seconds IS NOT NULL) OR
+        (schedule_type = 'once' AND scheduled_at IS NOT NULL)
+    )
+);
+
+CREATE INDEX idx_workflow_schedules_tenant ON workflow_schedules(tenant_id);
+CREATE INDEX idx_workflow_schedules_workflow ON workflow_schedules(workflow_id);
+CREATE INDEX idx_workflow_schedules_next_run ON workflow_schedules(next_run_at) WHERE is_active = true;
+CREATE INDEX idx_workflow_schedules_active ON workflow_schedules(is_active, next_run_at);
+

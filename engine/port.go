@@ -86,3 +86,16 @@ type DelayScheduler interface {
 	GetContinuation(ctx context.Context, id string) (*WorkflowContinuation, error)
 	Cancel(ctx context.Context, id string) error
 }
+
+type WorkflowScheduleRepository interface {
+	Save(ctx context.Context, schedule WorkflowSchedule) error
+	Update(ctx context.Context, schedule WorkflowSchedule) error
+	FindByID(ctx context.Context, id string) (*WorkflowSchedule, error)
+	FindByWorkflow(ctx context.Context, workflowID kernel.WorkflowID) ([]*WorkflowSchedule, error)
+	FindDue(ctx context.Context, before time.Time) ([]*WorkflowSchedule, error)
+	Delete(ctx context.Context, id string) error
+
+	// List all schedules for a tenant
+	FindByTenant(ctx context.Context, tenantID kernel.TenantID) ([]*WorkflowSchedule, error)
+	CountByWorkflow(ctx context.Context, workflowID kernel.WorkflowID) (int, error)
+}

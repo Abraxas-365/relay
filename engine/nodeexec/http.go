@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Abraxas-365/craftable/errx"
 	"github.com/Abraxas-365/relay/engine"
 )
 
