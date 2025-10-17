@@ -20,6 +20,7 @@
 ### OAuth Login Flow
 
 #### Initiate Login
+
 ```http
 POST /auth/login
 Content-Type: application/json
@@ -31,6 +32,7 @@ Content-Type: application/json
 ```
 
 **Response:**
+
 ```json
 {
   "auth_url": "https://accounts.google.com/o/oauth2/auth?...",
@@ -39,23 +41,30 @@ Content-Type: application/json
 ```
 
 #### OAuth Callback
+
 ```http
 GET /auth/callback/:provider?code=xxx&state=xxx
 ```
 
 **Response:**
+
 ```json
 {
   "access_token": "eyJhbGc...",
   "refresh_token": "eyJhbGc...",
   "token_type": "Bearer",
   "expires_in": 900,
-  "user": { /* UserDetailsDTO */ },
-  "tenant": { /* TenantDetailsDTO */ }
+  "user": {
+    /* UserDetailsDTO */
+  },
+  "tenant": {
+    /* TenantDetailsDTO */
+  }
 }
 ```
 
 #### Refresh Token
+
 ```http
 POST /auth/refresh
 Content-Type: application/json
@@ -66,12 +75,14 @@ Content-Type: application/json
 ```
 
 #### Logout
+
 ```http
 POST /auth/logout
 Authorization: Bearer <token>
 ```
 
 #### Get Current User
+
 ```http
 GET /auth/me
 Authorization: Bearer <token>
@@ -84,6 +95,7 @@ Authorization: Bearer <token>
 **Base Path:** `/api/tenant/:tenantId/invoices`
 
 ### Create Invoice
+
 ```http
 POST /api/tenant/:tenantId/invoices
 Authorization: Bearer <token>
@@ -105,18 +117,21 @@ Content-Type: application/json
 **Status:** `201 Created`
 
 ### Get Invoice by ID
+
 ```http
 GET /api/tenant/:tenantId/invoices/:invoiceId
 Authorization: Bearer <token>
 ```
 
 ### List Invoices
+
 ```http
 GET /api/tenant/:tenantId/invoices?status=PENDING_APPROVAL&vendor_id=xxx&area_id=xxx
 Authorization: Bearer <token>
 ```
 
 **Query Parameters:**
+
 - `status` - Invoice status filter
 - `vendor_id` - Filter by vendor
 - `area_id` - Filter by area
@@ -127,12 +142,14 @@ Authorization: Bearer <token>
 - `invoice_number` - Invoice number search
 
 ### Get Invoices by Status
+
 ```http
 GET /api/tenant/:tenantId/invoices/status/:status
 Authorization: Bearer <token>
 ```
 
 **Statuses:**
+
 - `PENDING_VENDOR_VERIFICATION`
 - `PENDING_APPROVAL`
 - `APPROVED`
@@ -141,24 +158,28 @@ Authorization: Bearer <token>
 - `CONTABILIZED`
 
 ### Get Pending Approval Invoices
+
 ```http
 GET /api/tenant/:tenantId/invoices/pending-approval
 Authorization: Bearer <token>
 ```
 
 ### Get Invoices by Vendor
+
 ```http
 GET /api/tenant/:tenantId/vendors/:vendorId/invoices
 Authorization: Bearer <token>
 ```
 
 ### Get Invoices by Area
+
 ```http
 GET /api/tenant/:tenantId/areas/:areaId/invoices
 Authorization: Bearer <token>
 ```
 
 ### Update Invoice
+
 ```http
 PUT /api/tenant/:tenantId/invoices/:invoiceId
 Authorization: Bearer <token>
@@ -174,6 +195,7 @@ Content-Type: application/json
 ```
 
 ### Approve Invoice
+
 ```http
 POST /api/tenant/:tenantId/invoices/:invoiceId/approval/approve
 Authorization: Bearer <token>
@@ -185,6 +207,7 @@ Content-Type: application/json
 ```
 
 ### Reject Invoice
+
 ```http
 POST /api/tenant/:tenantId/invoices/:invoiceId/approval/reject
 Authorization: Bearer <token>
@@ -196,6 +219,7 @@ Content-Type: application/json
 ```
 
 ### Send to Dispute
+
 ```http
 POST /api/tenant/:tenantId/invoices/:invoiceId/approval/dispute
 Authorization: Bearer <token>
@@ -207,24 +231,28 @@ Content-Type: application/json
 ```
 
 ### Mark as Contabilized
+
 ```http
 POST /api/tenant/:tenantId/invoices/:invoiceId/contabilize
 Authorization: Bearer <token>
 ```
 
 ### Validate with SIRE
+
 ```http
 POST /api/tenant/:tenantId/invoices/:invoiceId/validate/sire
 Authorization: Bearer <token>
 ```
 
 ### Three-Way Match
+
 ```http
 POST /api/tenant/:tenantId/invoices/:invoiceId/validate/three-way-match
 Authorization: Bearer <token>
 ```
 
 ### Delete Invoice
+
 ```http
 DELETE /api/tenant/:tenantId/invoices/:invoiceId
 Authorization: Bearer <token>
@@ -233,6 +261,7 @@ Authorization: Bearer <token>
 ### SIRE Synchronization
 
 #### Sync Invoices from SIRE
+
 ```http
 POST /api/tenant/:tenantId/invoices/sire/sync
 Authorization: Bearer <token>
@@ -245,6 +274,7 @@ Content-Type: application/json
 ```
 
 **Response:**
+
 ```json
 {
   "start_time": "2025-10-05T10:00:00Z",
@@ -270,6 +300,7 @@ Content-Type: application/json
 ```
 
 #### Get Sync Status
+
 ```http
 GET /api/tenant/:tenantId/invoices/sire/sync/status
 Authorization: Bearer <token>
@@ -282,6 +313,7 @@ Authorization: Bearer <token>
 **Base Path:** `/api/tenant/:tenantId/suppliers`
 
 ### Create Supplier
+
 ```http
 POST /api/tenant/:tenantId/suppliers
 Authorization: Bearer <token>
@@ -305,24 +337,28 @@ Content-Type: application/json
 **Status:** `201 Created`
 
 ### Get Supplier by ID
+
 ```http
 GET /api/tenant/:tenantId/suppliers/:supplierId
 Authorization: Bearer <token>
 ```
 
 ### Get Supplier by RUC
+
 ```http
 GET /api/tenant/:tenantId/suppliers/ruc/:ruc
 Authorization: Bearer <token>
 ```
 
 ### List Suppliers
+
 ```http
 GET /api/tenant/:tenantId/suppliers?status=ACTIVE&supplier_type=GOODS
 Authorization: Bearer <token>
 ```
 
 **Query Parameters:**
+
 - `status` - `PENDING_VERIFICATION|ACTIVE|SUSPENDED|BLACKLISTED`
 - `supplier_type` - `GOODS|SERVICES|BOTH`
 - `is_verified` - `true|false`
@@ -330,18 +366,21 @@ Authorization: Bearer <token>
 - `business_name` - Name search
 
 ### Get Active Suppliers
+
 ```http
 GET /api/tenant/:tenantId/suppliers/active
 Authorization: Bearer <token>
 ```
 
 ### Get Pending Verification
+
 ```http
 GET /api/tenant/:tenantId/suppliers/pending
 Authorization: Bearer <token>
 ```
 
 ### Search Suppliers
+
 ```http
 POST /api/tenant/:tenantId/suppliers/search
 Authorization: Bearer <token>
@@ -358,6 +397,7 @@ Content-Type: application/json
 ```
 
 ### Update Supplier
+
 ```http
 PUT /api/tenant/:tenantId/suppliers/:supplierId
 Authorization: Bearer <token>
@@ -371,6 +411,7 @@ Content-Type: application/json
 ```
 
 ### Verify Supplier
+
 ```http
 POST /api/tenant/:tenantId/suppliers/:supplierId/verify
 Authorization: Bearer <token>
@@ -382,6 +423,7 @@ Content-Type: application/json
 ```
 
 ### Suspend Supplier
+
 ```http
 POST /api/tenant/:tenantId/suppliers/:supplierId/suspend
 Authorization: Bearer <token>
@@ -393,6 +435,7 @@ Content-Type: application/json
 ```
 
 ### Blacklist Supplier
+
 ```http
 POST /api/tenant/:tenantId/suppliers/:supplierId/blacklist
 Authorization: Bearer <token>
@@ -404,24 +447,28 @@ Content-Type: application/json
 ```
 
 ### Activate Supplier
+
 ```http
 POST /api/tenant/:tenantId/suppliers/:supplierId/activate
 Authorization: Bearer <token>
 ```
 
 ### Delete Supplier
+
 ```http
 DELETE /api/tenant/:tenantId/suppliers/:supplierId
 Authorization: Bearer <token>
 ```
 
 ### Get Supplier Stats
+
 ```http
 GET /api/tenant/:tenantId/suppliers/:supplierId/stats
 Authorization: Bearer <token>
 ```
 
 **Response:**
+
 ```json
 {
   "supplier_id": "supplier_123",
@@ -431,22 +478,24 @@ Authorization: Bearer <token>
   "is_verified": true,
   "total_orders": 45,
   "total_invoices": 120,
-  "total_amount": 150000.00,
+  "total_amount": 150000.0,
   "average_order_days": 15,
-  "credit_limit": 50000.00,
-  "credit_used": 12000.00,
+  "credit_limit": 50000.0,
+  "credit_used": 12000.0,
   "last_order_date": "2025-09-28T00:00:00Z",
   "created_at": "2024-01-15T00:00:00Z"
 }
 ```
 
 ### Get Supplier Health Check
+
 ```http
 GET /api/tenant/:tenantId/suppliers/:supplierId/health
 Authorization: Bearer <token>
 ```
 
 ### Get Supplier Contacts
+
 ```http
 GET /api/tenant/:tenantId/suppliers/:supplierId/contacts
 Authorization: Bearer <token>
@@ -455,6 +504,7 @@ Authorization: Bearer <token>
 ### Bulk Operations
 
 #### Bulk Verify
+
 ```http
 POST /api/tenant/:tenantId/suppliers/bulk/verify
 Authorization: Bearer <token>
@@ -467,6 +517,7 @@ Content-Type: application/json
 ```
 
 #### Bulk Operation
+
 ```http
 POST /api/tenant/:tenantId/suppliers/bulk/operation
 Authorization: Bearer <token>
@@ -486,6 +537,7 @@ Content-Type: application/json
 **Base Path:** `/api/tenant/:tenantId/suppliers/:supplierId/contacts`
 
 ### Create Contact
+
 ```http
 POST /api/tenant/:tenantId/suppliers/:supplierId/contacts
 Authorization: Bearer <token>
@@ -510,24 +562,28 @@ Content-Type: application/json
 **Status:** `201 Created`
 
 ### Get Contact by ID
+
 ```http
 GET /api/tenant/:tenantId/suppliers/:supplierId/contacts/:contactId
 Authorization: Bearer <token>
 ```
 
 ### List Contacts
+
 ```http
 GET /api/tenant/:tenantId/suppliers/:supplierId/contacts
 Authorization: Bearer <token>
 ```
 
 ### Get Primary Contact
+
 ```http
 GET /api/tenant/:tenantId/suppliers/:supplierId/contacts/primary
 Authorization: Bearer <token>
 ```
 
 ### Get Contacts by Type
+
 ```http
 GET /api/tenant/:tenantId/suppliers/:supplierId/contacts/type/:type
 Authorization: Bearer <token>
@@ -536,6 +592,7 @@ Authorization: Bearer <token>
 **Types:** `PRIMARY`, `ACCOUNTING`, `PURCHASES`, `GENERAL`, `TECHNICAL`, `LEGAL`, `COMMERCIAL`
 
 ### Search Contacts
+
 ```http
 POST /api/tenant/:tenantId/suppliers/:supplierId/contacts/search
 Authorization: Bearer <token>
@@ -553,6 +610,7 @@ Content-Type: application/json
 ```
 
 ### Update Contact
+
 ```http
 PUT /api/tenant/:tenantId/suppliers/:supplierId/contacts/:contactId
 Authorization: Bearer <token>
@@ -566,6 +624,7 @@ Content-Type: application/json
 ```
 
 ### Set as Primary
+
 ```http
 POST /api/tenant/:tenantId/suppliers/:supplierId/contacts/:contactId/primary
 Authorization: Bearer <token>
@@ -578,6 +637,7 @@ Content-Type: application/json
 ```
 
 ### Add Note
+
 ```http
 POST /api/tenant/:tenantId/suppliers/:supplierId/contacts/:contactId/notes
 Authorization: Bearer <token>
@@ -589,6 +649,7 @@ Content-Type: application/json
 ```
 
 ### Update Type
+
 ```http
 PUT /api/tenant/:tenantId/suppliers/:supplierId/contacts/:contactId/type
 Authorization: Bearer <token>
@@ -600,18 +661,21 @@ Content-Type: application/json
 ```
 
 ### Activate Contact
+
 ```http
 POST /api/tenant/:tenantId/suppliers/:supplierId/contacts/:contactId/activate
 Authorization: Bearer <token>
 ```
 
 ### Deactivate Contact
+
 ```http
 POST /api/tenant/:tenantId/suppliers/:supplierId/contacts/:contactId/deactivate
 Authorization: Bearer <token>
 ```
 
 ### Block Contact
+
 ```http
 POST /api/tenant/:tenantId/suppliers/:supplierId/contacts/:contactId/block
 Authorization: Bearer <token>
@@ -623,24 +687,28 @@ Content-Type: application/json
 ```
 
 ### Delete Contact
+
 ```http
 DELETE /api/tenant/:tenantId/suppliers/:supplierId/contacts/:contactId
 Authorization: Bearer <token>
 ```
 
 ### Get Contact Stats
+
 ```http
 GET /api/tenant/:tenantId/suppliers/:supplierId/contacts/:contactId/stats
 Authorization: Bearer <token>
 ```
 
 ### Get Contacts by Type Stats
+
 ```http
 GET /api/tenant/:tenantId/suppliers/:supplierId/contacts/stats
 Authorization: Bearer <token>
 ```
 
 ### Validate Contact Info
+
 ```http
 POST /api/tenant/:tenantId/contacts/validate
 Authorization: Bearer <token>
@@ -654,6 +722,7 @@ Content-Type: application/json
 ```
 
 **Response:**
+
 ```json
 {
   "is_valid": true,
@@ -665,6 +734,7 @@ Content-Type: application/json
 ```
 
 ### Bulk Operations
+
 ```http
 POST /api/tenant/:tenantId/suppliers/:supplierId/contacts/bulk/operation
 Authorization: Bearer <token>
@@ -684,6 +754,7 @@ Content-Type: application/json
 **Base Path:** `/api/tenant/:tenantId/areas`
 
 ### Create Area
+
 ```http
 POST /api/tenant/:tenantId/areas
 Authorization: Bearer <token>
@@ -703,24 +774,28 @@ Content-Type: application/json
 **Status:** `201 Created`
 
 ### Get Area by ID
+
 ```http
 GET /api/tenant/:tenantId/areas/:id
 Authorization: Bearer <token>
 ```
 
 ### Get Area by Code
+
 ```http
 GET /api/tenant/:tenantId/areas/code/:code
 Authorization: Bearer <token>
 ```
 
 ### List Areas
+
 ```http
 GET /api/tenant/:tenantId/areas?status=ACTIVE&parent_id=xxx
 Authorization: Bearer <token>
 ```
 
 **Query Parameters:**
+
 - `status` - `ACTIVE|INACTIVE|ARCHIVED`
 - `parent_id` - Filter by parent area (use "null" or "root" for root areas)
 - `manager_id` - Filter by manager
@@ -729,30 +804,35 @@ Authorization: Bearer <token>
 - `cost_center` - Cost center
 
 ### Get Active Areas
+
 ```http
 GET /api/tenant/:tenantId/areas/active
 Authorization: Bearer <token>
 ```
 
 ### Get Root Areas
+
 ```http
 GET /api/tenant/:tenantId/areas/root
 Authorization: Bearer <token>
 ```
 
 ### Get Sub-areas
+
 ```http
 GET /api/tenant/:tenantId/areas/:id/subareas
 Authorization: Bearer <token>
 ```
 
 ### Get Areas by Manager
+
 ```http
 GET /api/tenant/:tenantId/areas/manager/:managerId
 Authorization: Bearer <token>
 ```
 
 ### Search Areas
+
 ```http
 POST /api/tenant/:tenantId/areas/search
 Authorization: Bearer <token>
@@ -772,6 +852,7 @@ Content-Type: application/json
 ```
 
 ### Update Area
+
 ```http
 PUT /api/tenant/:tenantId/areas/:id
 Authorization: Bearer <token>
@@ -785,6 +866,7 @@ Content-Type: application/json
 ```
 
 ### Set Manager
+
 ```http
 PUT /api/tenant/:tenantId/areas/:id/manager
 Authorization: Bearer <token>
@@ -796,12 +878,14 @@ Content-Type: application/json
 ```
 
 ### Remove Manager
+
 ```http
 DELETE /api/tenant/:tenantId/areas/:id/manager
 Authorization: Bearer <token>
 ```
 
 ### Set Budget
+
 ```http
 PUT /api/tenant/:tenantId/areas/:id/budget
 Authorization: Bearer <token>
@@ -813,24 +897,28 @@ Content-Type: application/json
 ```
 
 ### Activate Area
+
 ```http
 PUT /api/tenant/:tenantId/areas/:id/activate
 Authorization: Bearer <token>
 ```
 
 ### Deactivate Area
+
 ```http
 PUT /api/tenant/:tenantId/areas/:id/deactivate
 Authorization: Bearer <token>
 ```
 
 ### Archive Area
+
 ```http
 PUT /api/tenant/:tenantId/areas/:id/archive
 Authorization: Bearer <token>
 ```
 
 ### Move Area
+
 ```http
 PUT /api/tenant/:tenantId/areas/:id/move
 Authorization: Bearer <token>
@@ -842,24 +930,31 @@ Content-Type: application/json
 ```
 
 ### Delete Area
+
 ```http
 DELETE /api/tenant/:tenantId/areas/:id
 Authorization: Bearer <token>
 ```
 
 ### Get Area Hierarchy
+
 ```http
 GET /api/tenant/:tenantId/areas/:id/hierarchy
 Authorization: Bearer <token>
 ```
 
 **Response:**
+
 ```json
 {
-  "area": { /* Area entity */ },
+  "area": {
+    /* Area entity */
+  },
   "sub_areas": [
     {
-      "area": { /* Sub-area entity */ },
+      "area": {
+        /* Sub-area entity */
+      },
       "sub_areas": [],
       "level": 1
     }
@@ -869,12 +964,14 @@ Authorization: Bearer <token>
 ```
 
 ### Get Area Stats
+
 ```http
 GET /api/tenant/:tenantId/areas/:id/stats
 Authorization: Bearer <token>
 ```
 
 **Response:**
+
 ```json
 {
   "area_id": "area_123",
@@ -884,8 +981,8 @@ Authorization: Bearer <token>
   "is_active": true,
   "sub_areas_count": 3,
   "users_count": 12,
-  "budget": 100000.00,
-  "budget_used": 45000.00,
+  "budget": 100000.0,
+  "budget_used": 45000.0,
   "budget_percent": 45.0,
   "created_at": "2024-01-15T00:00:00Z"
 }
@@ -894,6 +991,7 @@ Authorization: Bearer <token>
 ### Bulk Operations
 
 #### Bulk Activate
+
 ```http
 PUT /api/tenant/:tenantId/areas/bulk/activate
 Authorization: Bearer <token>
@@ -905,6 +1003,7 @@ Content-Type: application/json
 ```
 
 #### Bulk Deactivate
+
 ```http
 PUT /api/tenant/:tenantId/areas/bulk/deactivate
 Authorization: Bearer <token>
@@ -916,6 +1015,7 @@ Content-Type: application/json
 ```
 
 #### Bulk Archive
+
 ```http
 PUT /api/tenant/:tenantId/areas/bulk/archive
 Authorization: Bearer <token>
@@ -933,12 +1033,14 @@ Content-Type: application/json
 Workflows define multi-level approval processes for invoices.
 
 **Workflow Types:**
+
 - `SIMPLE` - Single approval level
 - `MULTI_LEVEL` - Sequential multi-level approval
 - `CONDITIONAL` - Approval based on conditions (amount, vendor, etc.)
 - `PARALLEL` - Multiple approvals in parallel
 
 **Step Types:**
+
 - `APPROVAL` - Requires approval
 - `NOTIFICATION` - Send notification only
 - `AUTOMATIC` - Automatic action
@@ -990,6 +1092,7 @@ Workflows define multi-level approval processes for invoices.
 Routing rules automatically assign invoices to the correct area based on conditions.
 
 **Rule Types:**
+
 - `SUPPLIER` - Route by specific supplier
 - `SUPPLIER_GROUP` - Route by supplier group
 - `AMOUNT` - Route by amount threshold
@@ -1022,6 +1125,7 @@ Routing rules automatically assign invoices to the correct area based on conditi
 ```
 
 **Condition Operators:**
+
 - `eq` - Equals
 - `gt` - Greater than
 - `lt` - Less than
@@ -1069,6 +1173,7 @@ Rules are evaluated in priority order (lower number = higher priority). The firs
 Approvals track the approval process for invoices through workflow steps.
 
 ### Approval Status
+
 - `PENDING` - Awaiting approval
 - `APPROVED` - Approved
 - `REJECTED` - Rejected
@@ -1118,11 +1223,13 @@ Purchase orders are linked to invoices for three-way matching validation.
 ### Three-Way Match Process
 
 The system validates:
+
 1. **Purchase Order** - Ordered quantities and prices
 2. **Goods Receipt** - Received quantities
 3. **Invoice** - Billed quantities and prices
 
 **Match Criteria:**
+
 - Quantities match (within tolerance)
 - Prices match (within tolerance)
 - Vendor matches
@@ -1150,20 +1257,21 @@ The system validates:
 
 ### Error Types
 
-| Type | Description | HTTP Status Range |
-|------|-------------|-------------------|
-| `VALIDATION` | Invalid input data | 400 |
-| `AUTHORIZATION` | Authentication/permission issues | 401, 403 |
-| `NOT_FOUND` | Resource not found | 404 |
-| `CONFLICT` | Resource conflict (duplicate, etc.) | 409 |
-| `BUSINESS` | Business rule violation | 400, 412, 428 |
-| `EXTERNAL` | External service error | 502, 503 |
-| `INTERNAL` | Internal server error | 500 |
-| `TIMEOUT` | Request timeout | 408, 504 |
+| Type            | Description                         | HTTP Status Range |
+| --------------- | ----------------------------------- | ----------------- |
+| `VALIDATION`    | Invalid input data                  | 400               |
+| `AUTHORIZATION` | Authentication/permission issues    | 401, 403          |
+| `NOT_FOUND`     | Resource not found                  | 404               |
+| `CONFLICT`      | Resource conflict (duplicate, etc.) | 409               |
+| `BUSINESS`      | Business rule violation             | 400, 412, 428     |
+| `EXTERNAL`      | External service error              | 502, 503          |
+| `INTERNAL`      | Internal server error               | 500               |
+| `TIMEOUT`       | Request timeout                     | 408, 504          |
 
 ### Common Error Codes
 
 #### Invoice Errors
+
 - `INVOICE_NOT_FOUND` - Invoice not found
 - `INVOICE_ALREADY_EXISTS` - Duplicate invoice
 - `INVALID_INVOICE_STATUS` - Invalid status for operation
@@ -1174,6 +1282,7 @@ The system validates:
 - `THREE_WAY_MATCH_FAILED` - Three-way match validation failed
 
 #### Supplier Errors
+
 - `SUPPLIER_NOT_FOUND` - Supplier not found
 - `SUPPLIER_ALREADY_EXISTS` - Duplicate supplier
 - `SUPPLIER_NOT_VERIFIED` - Supplier not verified
@@ -1184,6 +1293,7 @@ The system validates:
 - `SUPPLIER_IN_USE` - Cannot delete (in use)
 
 #### Contact Errors
+
 - `CONTACT_NOT_FOUND` - Contact not found
 - `PRIMARY_CONTACT_EXISTS` - Primary contact already exists
 - `INVALID_CONTACT_TYPE` - Invalid contact type
@@ -1194,6 +1304,7 @@ The system validates:
 - `INVALID_PHONE` - Invalid phone format
 
 #### Area Errors
+
 - `AREA_NOT_FOUND` - Area not found
 - `AREA_ALREADY_EXISTS` - Duplicate area
 - `AREA_IN_USE` - Cannot delete (in use)
@@ -1204,6 +1315,7 @@ The system validates:
 - `PARENT_NOT_FOUND` - Parent area not found
 
 #### Workflow/Routing Errors
+
 - `RULE_NOT_FOUND` - Routing rule not found
 - `NO_MATCH` - No routing rule matched
 - `WORKFLOW_NOT_FOUND` - Workflow not found
@@ -1214,6 +1326,7 @@ The system validates:
 - `TIMED_OUT` - Approval timed out
 
 #### Auth Errors
+
 - `INVALID_REFRESH_TOKEN` - Invalid refresh token
 - `EXPIRED_REFRESH_TOKEN` - Expired refresh token
 - `INVALID_OAUTH_PROVIDER` - Invalid OAuth provider
@@ -1237,6 +1350,7 @@ The system validates:
 _(Not implemented in provided code, but commonly needed)_
 
 Webhooks can be configured to receive real-time notifications for:
+
 - Invoice status changes
 - Approval actions
 - SIRE sync completion
@@ -1254,9 +1368,12 @@ GET /api/tenant/:tenantId/invoices?page=1&per_page=50
 ```
 
 **Response includes pagination metadata:**
+
 ```json
 {
-  "items": [ /* ... */ ],
+  "items": [
+    /* ... */
+  ],
   "total": 150,
   "page": 1,
   "per_page": 50,
@@ -1275,6 +1392,7 @@ Authorization: Bearer <access_token>
 ```
 
 Or via cookie:
+
 ```
 Cookie: access_token=<token>
 ```
