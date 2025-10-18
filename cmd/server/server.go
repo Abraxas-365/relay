@@ -170,6 +170,10 @@ func setupRoutes(app *fiber.App, c *Container) {
 	// =================================================================
 	c.AuthHandlers.RegisterRoutes(app)
 	c.WhatsAppWebhookRoutes.RegisterRoutes(app)
+	if c.WebhookTriggerRoutes != nil {
+		c.WebhookTriggerRoutes.RegisterRoutes(app)
+		log.Println("    ✅ Webhook trigger routes registered")
+	}
 
 	// =================================================================
 	// TEST ROUTES (Development/Testing)

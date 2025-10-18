@@ -1,4 +1,4 @@
-package nodeexec
+package node
 
 import (
 	"context"

@@ -20,9 +20,10 @@ import (
 	"github.com/Abraxas-365/relay/engine"
 	"github.com/Abraxas-365/relay/engine/delayscheduler"
 	"github.com/Abraxas-365/relay/engine/engineinfra"
-	"github.com/Abraxas-365/relay/engine/nodeexec"
+	"github.com/Abraxas-365/relay/engine/node"
 	"github.com/Abraxas-365/relay/engine/scheduler"
 	"github.com/Abraxas-365/relay/engine/triggerhandler"
+	"github.com/Abraxas-365/relay/engine/webhooktrigger"
 	"github.com/Abraxas-365/relay/engine/workflowexec"
 
 	"github.com/Abraxas-365/relay/iam"
@@ -114,11 +115,13 @@ type Container struct {
 	// =================================================================
 	// ENGINE (n8n-style)
 	// =================================================================
-	WorkflowRepo        engine.WorkflowRepository
-	WorkflowExecutor    engine.WorkflowExecutor
-	ExpressionEvaluator engine.ExpressionEvaluator
-	DelayScheduler      engine.DelayScheduler
-	TriggerHandler      *triggerhandler.TriggerHandler
+	WorkflowRepo          engine.WorkflowRepository
+	WorkflowExecutor      engine.WorkflowExecutor
+	ExpressionEvaluator   engine.ExpressionEvaluator
+	DelayScheduler        engine.DelayScheduler
+	TriggerHandler        *triggerhandler.TriggerHandler
+	WebhookTriggerHandler *webhooktrigger.WebhookTriggerHandler
+	WebhookTriggerRoutes  *webhooktrigger.WebhookTriggerRoutes
 
 	// ✅ Schedule Components
 	ScheduleRepo      engine.WorkflowScheduleRepository
@@ -374,16 +377,16 @@ func (c *Container) initEngineComponents() {
 	log.Println("    ✅ Delay scheduler worker started")
 
 	// Initialize node executors
-	c.ActionExecutor = nodeexec.NewActionExecutor()
-	c.ConditionExecutor = nodeexec.NewConditionExecutor()
-	c.DelayExecutor = nodeexec.NewDelayExecutor(c.DelayScheduler)
-	c.AIAgentExecutor = nodeexec.NewAIAgentExecutor(c.AgentChatRepo)
-	c.SendMessageExecutor = nodeexec.NewSendMessageExecutor(c.ChannelManager)
-	c.HTTPExecutor = nodeexec.NewHTTPExecutor()
-	c.TransformExecutor = nodeexec.NewTransformExecutor(c.ExpressionEvaluator)
-	c.SwitchExecutor = nodeexec.NewSwitchExecutor()
-	c.LoopExecutor = nodeexec.NewLoopExecutor()
-	c.ValidateExecutor = nodeexec.NewValidateExecutor()
+	c.ActionExecutor = node.NewActionExecutor()
+	c.ConditionExecutor = node.NewConditionExecutor()
+	c.DelayExecutor = node.NewDelayExecutor(c.DelayScheduler)
+	c.AIAgentExecutor = node.NewAIAgentExecutor(c.AgentChatRepo, c.ExpressionEvaluator)
+	c.SendMessageExecutor = node.NewSendMessageExecutor(c.ChannelManager, c.ExpressionEvaluator)
+	c.HTTPExecutor = node.NewHTTPExecutor(c.ExpressionEvaluator)
+	c.TransformExecutor = node.NewTransformExecutor(c.ExpressionEvaluator)
+	c.SwitchExecutor = node.NewSwitchExecutor()
+	c.LoopExecutor = node.NewLoopExecutor()
+	c.ValidateExecutor = node.NewValidateExecutor()
 
 	log.Println("    ✅ Node executors initialized (10 types)")
 
@@ -408,6 +411,17 @@ func (c *Container) initEngineComponents() {
 		c.WorkflowExecutor,
 	)
 	log.Println("    ✅ Trigger handler initialized")
+
+	c.WebhookTriggerHandler = webhooktrigger.NewWebhookTriggerHandler(
+		c.WorkflowRepo,
+		c.TriggerHandler,
+	)
+	log.Println("    ✅ Webhook trigger handler initialized")
+
+	c.WebhookTriggerRoutes = webhooktrigger.NewWebhookTriggerRoutes(
+		c.WebhookTriggerHandler,
+	)
+	log.Println("    ✅ Webhook trigger routes initialized")
 
 	// ✅ Initialize schedule service
 	c.ScheduleService = scheduler.NewScheduleService(
